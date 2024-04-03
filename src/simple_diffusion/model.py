@@ -24,7 +24,7 @@ class DiffusionModel(L.LightningModule):
         alpha_schedule = torch.cumprod(1 - beta_schedule, dim=0)  # (T,)
         self.register_buffer("alpha_schedule", alpha_schedule)
         self.denoiser = self._build_denoiser(**denoiser_kwargs)
-        self.latent_shape = (1,)
+        self.latent_shape = denoiser_kwargs["latent_shape"]
         self.sample_plotter = sample_plotter
 
     def _build_denoiser(self, **denoiser_kwargs):

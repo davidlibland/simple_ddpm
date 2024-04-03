@@ -5,9 +5,9 @@ from torch import nn as nn
 class Denoiser(nn.Module):
     """A simple fully connected denoiser network."""
 
-    def __init__(self, item_shape, time_scale, n_freqs=32, n_hidden=64):
+    def __init__(self, latent_shape, time_scale, n_freqs=32, n_hidden=64):
         super().__init__()
-        n_dims = torch.prod(torch.tensor(item_shape)).item()
+        n_dims = torch.prod(torch.tensor(latent_shape)).item()
         self.net = nn.Sequential(
             nn.Linear(n_dims + n_freqs, n_hidden),
             nn.LayerNorm(n_hidden),

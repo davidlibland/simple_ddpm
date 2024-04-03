@@ -5,7 +5,7 @@ import torch
 from lightning.pytorch.loggers import NeptuneLogger
 from torch.utils.data import Dataset, DataLoader
 
-from simple_diffusion.gaussian_1d.plotting import sample_plotter
+from simple_diffusion.gaussian_2d.plotting import sample_plotter
 from simple_diffusion.model import DiffusionModel
 
 SEED = 1337
@@ -16,16 +16,17 @@ L.seed_everything(SEED)
 
 
 # Setup the dataset:
-class GaussianMixture(Dataset):
+class GaussianMixture2d(Dataset):
     def __init__(self, means, stds, n_samples=1000):
         """A multimodal dataset"""
-        self.means = means
-        self.stds = stds
+        self.means = torch.tensor(means)
+        self.stds = torch.tensor(stds)
         self.n_modes = len(means)
         self.n_samples = n_samples
         self.samples = torch.cat(
             [
-                means[i] + stds[i] * torch.randn(n_samples // self.n_modes, 1)
+                self.means[i][None, :]
+                + self.stds[i] * torch.randn(n_samples // self.n_modes, 2)
                 for i in range(self.n_modes)
             ]
         )
@@ -38,7 +39,7 @@ class GaussianMixture(Dataset):
 
 
 def train(
-    means=(-1, 1),
+    means=((-1, 1), (1, -1)),
     stds=(0.1, 0.1),
     n_samples=1000,
     batch_size=1000,
@@ -47,15 +48,15 @@ def train(
     beta=0.3,
     log_to_neptune=True,
 ):
-    train_dataset = GaussianMixture(means, stds, n_samples=n_samples)
+    train_dataset = GaussianMixture2d(means, stds, n_samples=n_samples)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_dataset = GaussianMixture(means, stds, n_samples=n_samples)
+    val_dataset = GaussianMixture2d(means, stds, n_samples=n_samples)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
     # Setup the model:
     beta_schedule = beta * ((1 - beta) ** (n_steps - torch.arange(n_steps)))
     model = DiffusionModel(
-        beta_schedule=beta_schedule, latent_shape=(1,), sample_plotter=sample_plotter
+        beta_schedule=beta_schedule, latent_shape=(2,), sample_plotter=sample_plotter
     )
 
     # Setup the logger and the trainer:
