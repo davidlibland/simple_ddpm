@@ -2,55 +2,42 @@
 
 import lightning as L
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
+from simple_diffusion.fully_connected_denoiser import Denoiser as FC_Denoiser
 from simple_diffusion.metrics import energy_coefficient
 
 
-class Denoiser(nn.Module):
-    def __init__(self, n_dims, time_scale, n_freqs=32, n_hidden=64):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(n_dims + n_freqs, n_hidden),
-            nn.LayerNorm(n_hidden),
-            nn.ReLU(),
-            nn.Linear(n_hidden, n_dims),
-        )
-        self.register_buffer(
-            "fourier_freqs",
-            torch.arange(1, n_freqs, 2).float() / (2 * n_freqs) / time_scale,
-        )
-
-    def forward(self, x, t):
-        return self.net(torch.cat([x, self.encode_time(t)], dim=-1))
-
-    def encode_time(self, t):
-        return torch.cat(
-            [
-                torch.sin(t * self.fourier_freqs * 2 * torch.pi),
-                torch.cos(t * self.fourier_freqs * 2 * torch.pi),
-            ],
-            dim=-1,
-        )
-
-
 class DiffusionModel(L.LightningModule):
-    def __init__(self, beta_schedule, **denoiser_kwargs):
+    def __init__(self, beta_schedule, sample_plotter=None, **denoiser_kwargs):
+        """
+        A simple diffusion model.
+        Args:
+            beta_schedule (torch.Tensor): The schedule of beta values.
+            sample_plotter (callable): A function that plots samples, returns a figure.
+            denoiser_kwargs (dict): The keyword arguments for the denoiser.
+        """
         super().__init__()
+        self.save_hyperparameters(ignore=["sample_plotter"])
         self.register_buffer("beta_schedule", beta_schedule)  # (T,)
         # assert self.beta_schedule[0] == 0
         alpha_schedule = torch.cumprod(1 - beta_schedule, dim=0)  # (T,)
         self.register_buffer("alpha_schedule", alpha_schedule)
         self.denoiser = self._build_denoiser(**denoiser_kwargs)
         self.latent_shape = (1,)
+        self.sample_plotter = sample_plotter
 
     def _build_denoiser(self, **denoiser_kwargs):
-        return Denoiser(
-            1,
-            time_scale=len(self.beta_schedule) - 1,
-            **denoiser_kwargs,
-        )
+        """Build the denoiser network."""
+        denoiser_kwargs = {**denoiser_kwargs}
+        denoiser_type = denoiser_kwargs.pop("type", "fully_connected")
+        if denoiser_type == "fully_connected":
+            return FC_Denoiser(
+                time_scale=len(self.beta_schedule) - 1,
+                **denoiser_kwargs,
+            )
+        elif denoiser_type == "unet":
+            raise NotImplementedError("UNet denoiser not implemented.")
 
     def decoder(self, z, t):
         """The decoder network, defined in terms of the denoiser."""
@@ -86,26 +73,9 @@ class DiffusionModel(L.LightningModule):
         self.logger.log_metrics({"val/mean_err": err})
         e_coeff = energy_coefficient(samples, batch)
         self.logger.log_metrics({"val/energy_coeff": e_coeff})
-        import matplotlib.pyplot as plt
-
-        fig, ax = plt.subplots()
-        ax.hist(
-            batch.detach().cpu().numpy().flatten(),
-            bins=100,
-            alpha=0.5,
-            label="True",
-            color="blue",
-        )
-        ax.hist(
-            samples.detach().cpu().numpy().flatten(),
-            bins=100,
-            alpha=0.5,
-            label="Fake",
-            color="red",
-        )
-        # plt.hist(latent_samples.flatten(), bins=100, alpha=0.5, label="Latent", color="green")
-        ax.legend()
-        self.logger.run["val/samples"].append(fig)
+        if self.sample_plotter is not None:
+            fig = self.sample_plotter(batch, samples)
+            self.logger.run["val/samples"].append(fig)
         return err
 
     def configure_optimizers(self):
