@@ -68,7 +68,7 @@ def train(
     trainer = L.Trainer(
         max_epochs=n_epochs,
         logger=neptune_logger,
-        check_val_every_n_epoch=10,
+        check_val_every_n_epoch=100,
     )
     trainer.fit(model, train_loader, val_loader)
 

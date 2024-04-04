@@ -9,12 +9,15 @@ from simple_diffusion.metrics import energy_coefficient
 
 
 class DiffusionModel(L.LightningModule):
-    def __init__(self, beta_schedule, sample_plotter=None, **denoiser_kwargs):
+    def __init__(
+        self, beta_schedule, sample_plotter=None, learning_rate=1e-1, **denoiser_kwargs
+    ):
         """
         A simple diffusion model.
         Args:
             beta_schedule (torch.Tensor): The schedule of beta values.
             sample_plotter (callable): A function that plots samples, returns a figure.
+            learning_rate (float): The learning rate for the optimizer.
             denoiser_kwargs (dict): The keyword arguments for the denoiser.
         """
         super().__init__()
@@ -66,21 +69,21 @@ class DiffusionModel(L.LightningModule):
         self.logger.log_metrics({"train/loss": loss})
         return loss
 
-    def validation_step(self, batch):
+    def validation_step(self, batch, batch_idx):
         """The validation step for the diffusion model."""
         samples = self.generate(len(batch))
         err = abs(samples.mean() - batch.mean())
         self.logger.log_metrics({"val/mean_err": err})
         e_coeff = energy_coefficient(samples, batch)
         self.logger.log_metrics({"val/energy_coeff": e_coeff})
-        if self.sample_plotter is not None:
+        if batch_idx == 0 and self.sample_plotter is not None:
             fig = self.sample_plotter(batch, samples)
             self.logger.run["val/samples"].append(fig)
         return err
 
     def configure_optimizers(self):
         """The optimizer for the diffusion model."""
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-1)
+        optimizer = torch.optim.Adam(self.parameters())
         return optimizer
 
     def generate(self, n, seed=None):

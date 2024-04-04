@@ -2,11 +2,16 @@
 
 import lightning as L
 import torch
+import torchvision
+import torchvision.transforms as transforms
 from lightning.pytorch.loggers import NeptuneLogger
 from torch.utils.data import Dataset, DataLoader
 
 from simple_diffusion.gaussian_2d.plotting import sample_plotter
 from simple_diffusion.model import DiffusionModel
+
+# PyTorch TensorBoard support
+
 
 SEED = 1337
 NEPTUNE_PROJECT = "davidlibland/simplediffusion"
@@ -49,9 +54,19 @@ def train(
     log_to_neptune=True,
     learning_rate=3e-2,
 ):
-    train_dataset = GaussianMixture2d(means, stds, n_samples=n_samples)
+    transform = transforms.Compose(
+        [transforms.ToTensor(), transforms.Normalize((0.5,), (0.5,))]
+    )
+
+    # Create datasets for training & validation, download if necessary
+    train_dataset = torchvision.datasets.FashionMNIST(
+        "./data", train=True, transform=transform, download=True
+    )
+    val_dataset = torchvision.datasets.FashionMNIST(
+        "./data", train=False, transform=transform, download=True
+    )
+
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_dataset = GaussianMixture2d(means, stds, n_samples=n_samples)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
     # Setup the model:
