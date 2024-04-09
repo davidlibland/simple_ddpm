@@ -18,10 +18,13 @@ class Denoiser(nn.Module):
             "fourier_freqs",
             torch.arange(1, n_freqs, 2).float() / (2 * n_freqs) / time_scale,
         )
+        self.net[-1].weight.data.zero_()
+        self.net[-1].bias.data.zero_()
 
     def forward(self, x, t):
         x_ = x.view(x.shape[0], -1)
-        y = self.net(torch.cat([x_, self.encode_time(t)], dim=-1))
+        t_ = self.encode_time(t).view(x.shape[0], -1)
+        y = self.net(torch.cat([x_, t_], dim=-1))
         return y.view(x.shape)
 
     def encode_time(self, t):

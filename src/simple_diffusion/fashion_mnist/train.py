@@ -1,5 +1,7 @@
 """Train a diffusion model"""
 
+import itertools
+
 import lightning as L
 import torch
 import torchvision
@@ -7,7 +9,7 @@ import torchvision.transforms as transforms
 from lightning.pytorch.loggers import NeptuneLogger
 from torch.utils.data import Dataset, DataLoader
 
-from simple_diffusion.gaussian_2d.plotting import sample_plotter
+from simple_diffusion.fashion_mnist.plotting import sample_plotter
 from simple_diffusion.model import DiffusionModel
 
 # PyTorch TensorBoard support
@@ -15,37 +17,25 @@ from simple_diffusion.model import DiffusionModel
 
 SEED = 1337
 NEPTUNE_PROJECT = "davidlibland/simplediffusion"
+IMAGE_DIM = 28
 
 # Set the seed:
 L.seed_everything(SEED)
 
 
-# Setup the dataset:
-class GaussianMixture2d(Dataset):
-    def __init__(self, means, stds, n_samples=1000):
-        """A multimodal dataset"""
-        self.means = torch.tensor(means)
-        self.stds = torch.tensor(stds)
-        self.n_modes = len(means)
-        self.n_samples = n_samples
-        self.samples = torch.cat(
-            [
-                self.means[i][None, :]
-                + self.stds[i] * torch.randn(n_samples // self.n_modes, 2)
-                for i in range(self.n_modes)
-            ]
-        )
+class DropLabels(Dataset):
+    def __init__(self, dataset):
+        self.dataset = dataset
 
     def __len__(self):
-        return len(self.samples)
+        return len(self.dataset)
 
     def __getitem__(self, idx):
-        return self.samples[idx]
+        x, y = self.dataset[idx]
+        return x
 
 
 def train(
-    means=((-1, 1), (1, -1), (1, 1)),
-    stds=(0.03, 0.03, 0.03),
     n_samples=1000,
     batch_size=1000,
     n_epochs=10000,
@@ -59,11 +49,15 @@ def train(
     )
 
     # Create datasets for training & validation, download if necessary
-    train_dataset = torchvision.datasets.FashionMNIST(
-        "./data", train=True, transform=transform, download=True
+    train_dataset = DropLabels(
+        torchvision.datasets.FashionMNIST(
+            "./data", train=True, transform=transform, download=True
+        )
     )
-    val_dataset = torchvision.datasets.FashionMNIST(
-        "./data", train=False, transform=transform, download=True
+    val_dataset = DropLabels(
+        torchvision.datasets.FashionMNIST(
+            "./data", train=False, transform=transform, download=True
+        )
     )
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -73,7 +67,7 @@ def train(
     beta_schedule = beta * ((1 - beta) ** (n_steps - torch.arange(n_steps)))
     model = DiffusionModel(
         beta_schedule=beta_schedule,
-        latent_shape=(2,),
+        latent_shape=(1, IMAGE_DIM, IMAGE_DIM),
         learning_rate=learning_rate,
         sample_plotter=sample_plotter,
     )
@@ -86,8 +80,6 @@ def train(
         mode="async" if log_to_neptune else "debug",
     )
     neptune_logger.run["training_params"] = {
-        "means": means,
-        "stds": stds,
         "n_samples": n_samples,
         "batch_size": batch_size,
         "n_epochs": n_epochs,
@@ -102,23 +94,12 @@ def train(
     )
     trainer.fit(model, train_loader, val_loader)
 
-    alpha = model.alpha_schedule[-1].unsqueeze(-1)
-    latent_samples = (
-        (
-            torch.sqrt(1 - alpha) * torch.randn(len(train_dataset.samples), 1)
-            + torch.sqrt(alpha) * train_dataset.samples
-        )
-        .detach()
-        .cpu()
-        .numpy()
-    )
-    true_samples = train_dataset.samples.detach().cpu().numpy()
-    fake_samples = (
-        trainer.model.generate(len(true_samples), seed=SEED).detach().cpu().numpy()
-    )
+    train_samples = torch.cat(list(itertools.islice(train_dataset, 0, 30)), dim=0)
+    true_samples = train_samples.detach().cpu()
+    fake_samples = trainer.model.generate(len(true_samples), seed=SEED).detach().cpu()
     fig = sample_plotter(
-        real=train_dataset.samples.detach().cpu(),
-        fake=trainer.model.generate(len(true_samples), seed=SEED).detach().cpu(),
+        real=true_samples,
+        fake=fake_samples,
     )
 
     neptune_logger.run["samples"].upload(fig)

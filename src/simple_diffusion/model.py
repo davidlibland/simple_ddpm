@@ -55,6 +55,13 @@ class DiffusionModel(L.LightningModule):
 
     def training_step(self, batch):
         """The training step for the diffusion model."""
+        loss, t = self._shared_step(batch)
+        loss = loss.mean()
+        self.logger.log_metrics({"train/loss": loss})
+        return loss
+
+    def _shared_step(self, batch):
+        """The shared step for the training and validation steps."""
         x = batch
         n = x.shape[0]
         t = torch.randint(1, len(self.beta_schedule), (n,)).to(x.device)
@@ -65,12 +72,12 @@ class DiffusionModel(L.LightningModule):
         alpha = self.alpha_schedule[t]
         z = torch.sqrt(alpha) * x + torch.sqrt(1 - alpha) * eps
         eps_tilde = self.denoiser(z, t)
-        loss = F.mse_loss(eps_tilde, eps)
-        self.logger.log_metrics({"train/loss": loss})
-        return loss
+        loss = F.mse_loss(eps_tilde, eps, reduction="none")
+        return loss, t
 
     def validation_step(self, batch, batch_idx):
         """The validation step for the diffusion model."""
+
         samples = self.generate(len(batch))
         err = abs(samples.mean() - batch.mean())
         self.logger.log_metrics({"val/mean_err": err})
@@ -79,6 +86,22 @@ class DiffusionModel(L.LightningModule):
         if batch_idx == 0 and self.sample_plotter is not None:
             fig = self.sample_plotter(batch, samples)
             self.logger.run["val/samples"].append(fig)
+
+            # Add a scatter plot of losses at each time step:
+            import matplotlib.pyplot as plt
+
+            loss, t = self._shared_step(batch)
+            loss = loss.view(loss.size(0), -1).mean(1)
+
+            fig, ax = plt.subplots()
+            ax.scatter(
+                x=t.detach().cpu().numpy().flatten(),
+                y=loss.detach().cpu().numpy().flatten(),
+            )
+            ax.set_xlabel("Diffusion Step")
+            ax.set_ylabel("MSE Loss")
+            ax.set_title("Losses by Diffusion Step")
+            self.logger.run["val/losses_by_time"].append(fig)
         return err
 
     def configure_optimizers(self):
