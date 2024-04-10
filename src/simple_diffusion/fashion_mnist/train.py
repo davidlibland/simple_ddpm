@@ -88,13 +88,16 @@ def train(
     }
     model = DiffusionModel(
         beta_schedule=beta_schedule,
-        latent_shape=(1, IMAGE_DIM, IMAGE_DIM),
+        # latent_shape=(1, IMAGE_DIM, IMAGE_DIM),
         learning_rate=learning_rate,
         sample_plotter=sample_plotter,
         sample_metrics=metrics,
         sample_metric_pre_process_fn=lambda gray_img: gray_img.repeat(1, 3, 1, 1).to(
             "cpu"
         ),
+        type="unet",
+        n_steps=3,
+        n_channels=1,
     )
 
     # Setup the logger and the trainer:

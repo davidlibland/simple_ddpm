@@ -9,6 +9,7 @@ from torchmetrics import Metric
 
 from simple_diffusion.fully_connected_denoiser import Denoiser as FC_Denoiser
 from simple_diffusion.metrics import energy_coefficient
+from simple_diffusion.unet import UNet
 
 
 class DiffusionModel(L.LightningModule):
@@ -57,7 +58,9 @@ class DiffusionModel(L.LightningModule):
                 **denoiser_kwargs,
             )
         elif denoiser_type == "unet":
-            raise NotImplementedError("UNet denoiser not implemented.")
+            return UNet(
+                **denoiser_kwargs,
+            )
 
     def decoder(self, z, t):
         """The decoder network, defined in terms of the denoiser."""
