@@ -15,6 +15,7 @@ dependencies = [
     "torch",
     "lightning",
     "neptune",
+    "torchmetrics[image]",
 ]
 dynamic = ["version"]
 
