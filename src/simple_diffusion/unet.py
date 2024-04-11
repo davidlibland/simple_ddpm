@@ -11,6 +11,9 @@ class Up(nn.Module):
             scale_factor=2, mode="bilinear", align_corners=False
         )
 
+    def __repr__(self):
+        return f"Up(in_channels={self.conv.in_channels}, out_channels={self.conv.out_channels})"
+
     def forward(self, x, skip, t):
         # Ignore t for now.
         h = self.conv(x)
@@ -24,6 +27,9 @@ class Down(nn.Module):
         super().__init__()
         self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
         self.pool = nn.AvgPool2d(2)
+
+    def __repr__(self):
+        return f"Down(in_channels={self.conv.in_channels}, out_channels={self.conv.out_channels})"
 
     def forward(self, x, t):
         # Ignore t for now.
@@ -53,8 +59,8 @@ class UNet(nn.Module):
         self.ups = nn.ModuleList(
             [
                 Up(in_channels, out_channels)
-                for in_channels, out_channels in zip(
-                    channel_list[1:], channel_list[:-1]
+                for in_channels, out_channels in reversed(
+                    list(zip(channel_list[1:], channel_list[:-1]))
                 )
             ]
         )

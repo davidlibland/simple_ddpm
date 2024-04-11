@@ -9,4 +9,5 @@ def test_fashion_mnist():
         log_to_neptune=False,
         batch_size=100,
         check_val_every_n_epoch=1,
+        debug=True,
     )

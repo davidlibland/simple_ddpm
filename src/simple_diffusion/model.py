@@ -1,6 +1,6 @@
 """A simple diffusion model"""
 
-from typing import Dict, Callable
+from typing import Dict, Callable, Tuple
 
 import lightning as L
 import torch
@@ -16,6 +16,7 @@ class DiffusionModel(L.LightningModule):
     def __init__(
         self,
         beta_schedule,
+        latent_shape: Tuple[int],
         sample_plotter=None,
         learning_rate=1e-1,
         sample_metrics: Dict[str, Metric] = None,
@@ -26,6 +27,7 @@ class DiffusionModel(L.LightningModule):
         A simple diffusion model.
         Args:
             beta_schedule (torch.Tensor): The schedule of beta values.
+            latent_shape (Tuple[int]): The shape of the latent space.
             sample_plotter (callable): A function that plots samples, returns a figure.
             learning_rate (float): The learning rate for the optimizer.
             sample_metrics (dict): A list of metrics to log, each should be a TorchMetric, which has
@@ -43,7 +45,6 @@ class DiffusionModel(L.LightningModule):
         alpha_schedule = torch.cumprod(1 - beta_schedule, dim=0)  # (T,)
         self.register_buffer("alpha_schedule", alpha_schedule)
         self.denoiser = self._build_denoiser(**denoiser_kwargs)
-        self.latent_shape = denoiser_kwargs["latent_shape"]
         self.sample_plotter = sample_plotter
         self.sample_metrics = sample_metrics
         self.sample_metric_pre_process_fn = sample_metric_pre_process_fn
@@ -55,6 +56,7 @@ class DiffusionModel(L.LightningModule):
         if denoiser_type == "fully_connected":
             return FC_Denoiser(
                 time_scale=len(self.beta_schedule) - 1,
+                latent_shape=self.hparams.latent_shape,
                 **denoiser_kwargs,
             )
         elif denoiser_type == "unet":
@@ -188,7 +190,7 @@ class DiffusionModel(L.LightningModule):
             gen.manual_seed(seed)
         else:
             gen = None
-        z = torch.randn(n, *self.latent_shape, generator=gen).to(self.device)
+        z = torch.randn(n, *self.hparams.latent_shape, generator=gen).to(self.device)
         for t in range(len(self.beta_schedule) - 1, 0, -1):
             t = torch.tensor(t).to(self.device)
             while len(t.shape) < len(z.shape):

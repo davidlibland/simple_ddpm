@@ -18,18 +18,21 @@ from simple_diffusion.model import DiffusionModel
 
 SEED = 1337
 NEPTUNE_PROJECT = "davidlibland/simplediffusion"
-IMAGE_DIM = 7
+IMAGE_DIM = 8
 
 # Set the seed:
 L.seed_everything(SEED)
 
 
 class DropLabels(Dataset):
-    def __init__(self, dataset):
+    def __init__(self, dataset, data_shrink_factor=None):
         self.dataset = dataset
+        self.data_shrink_factor = data_shrink_factor
 
     def __len__(self):
-        return len(self.dataset)  # // 100
+        if self.data_shrink_factor is not None:
+            return len(self.dataset) // self.data_shrink_factor
+        return len(self.dataset)
 
     def __getitem__(self, idx):
         x, y = self.dataset[idx]
@@ -45,6 +48,7 @@ def train(
     log_to_neptune=True,
     learning_rate=3e-2,
     beta_schedule_form="geometric",
+    debug=False,
 ):
     transform = transforms.Compose(
         [
@@ -58,12 +62,14 @@ def train(
     train_dataset = DropLabels(
         torchvision.datasets.FashionMNIST(
             "./data", train=True, transform=transform, download=True
-        )
+        ),
+        data_shrink_factor=1000 if debug else None,
     )
     val_dataset = DropLabels(
         torchvision.datasets.FashionMNIST(
             "./data", train=False, transform=transform, download=True
-        )
+        ),
+        data_shrink_factor=100 if debug else None,
     )
 
     train_loader = DataLoader(
@@ -88,7 +94,7 @@ def train(
     }
     model = DiffusionModel(
         beta_schedule=beta_schedule,
-        # latent_shape=(1, IMAGE_DIM, IMAGE_DIM),
+        latent_shape=(1, IMAGE_DIM, IMAGE_DIM),
         learning_rate=learning_rate,
         sample_plotter=sample_plotter,
         sample_metrics=metrics,
