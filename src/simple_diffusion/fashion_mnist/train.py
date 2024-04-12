@@ -8,7 +8,6 @@ import torchvision
 import torchvision.transforms as transforms
 from lightning.pytorch.loggers import NeptuneLogger
 from torch.utils.data import Dataset, DataLoader
-from torchmetrics.image.fid import FrechetInceptionDistance
 
 from simple_diffusion.fashion_mnist.plotting import sample_plotter
 from simple_diffusion.model import DiffusionModel
@@ -87,7 +86,7 @@ def train(
         beta_end = beta
         beta_schedule = torch.linspace(beta_start, beta_end, n_steps, dtype=torch.float)
     metrics = {
-        "fid": FrechetInceptionDistance(normalize=True, feature=64),
+        # "fid": FrechetInceptionDistance(normalize=True, feature=64),
         # "kid": KernelInceptionDistance(
         #     normalize=True, subset_size=(batch_size // 2), feature=64
         # ),
@@ -97,7 +96,7 @@ def train(
         latent_shape=(1, IMAGE_DIM, IMAGE_DIM),
         learning_rate=learning_rate,
         sample_plotter=sample_plotter,
-        sample_metrics=metrics,
+        sample_metrics=None,  # metrics,
         sample_metric_pre_process_fn=lambda gray_img: gray_img.repeat(1, 3, 1, 1).to(
             "cpu"
         ),

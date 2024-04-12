@@ -61,6 +61,7 @@ class DiffusionModel(L.LightningModule):
             )
         elif denoiser_type == "unet":
             return UNet(
+                time_scale=len(self.beta_schedule) - 1,
                 **denoiser_kwargs,
             )
 
@@ -80,7 +81,21 @@ class DiffusionModel(L.LightningModule):
         loss, t = self._shared_step(batch)
         loss = loss.mean()
         self.logger.log_metrics({"train/loss": loss})
+
+        # Misc logging:
+        for name, param in self.named_parameters():
+            if "tdense" in name:
+                self.logger.log_metrics({f"param/{name}": param.norm()})
         return loss
+
+    def on_after_backward(self) -> None:
+        """Log the gradient norm after the backward pass."""
+        for name, param in self.named_parameters():
+            self.logger.log_metrics({f"grad/{name}": param.grad.norm()})
+
+    def on_train_epoch_start(self) -> None:
+        """Log the current epoch."""
+        self.logger.log_metrics({"epoch": self.trainer.current_epoch})
 
     def _shared_step(self, batch):
         """The shared step for the training and validation steps."""
