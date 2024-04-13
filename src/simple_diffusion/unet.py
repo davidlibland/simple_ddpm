@@ -38,17 +38,58 @@ class Normalization(nn.Module):
         return self.norm(x) * scale + loc
 
 
-class Up(nn.Module):
-    def __init__(self, in_channels, out_channels, time_embed_dim, activation="gelu"):
+class ResNetBlock(nn.Module):
+    def __init__(self, n_channels, time_embed_dim, activation="gelu"):
         super().__init__()
-        self.norm = Normalization(
+        self.norm1 = Normalization(
             num_groups=1,
-            num_channels=in_channels,
+            num_channels=n_channels,
             time_embed_dim=time_embed_dim,
             activation=activation,
         )
-        self.activation = _get_activation(activation)
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+        self.activation1 = _get_activation(activation)
+        self.conv1 = nn.Conv2d(n_channels, 2 * n_channels, kernel_size=3, padding=1)
+
+        self.norm2 = Normalization(
+            num_groups=1,
+            num_channels=2 * n_channels,
+            time_embed_dim=time_embed_dim,
+            activation=activation,
+        )
+        self.activation2 = _get_activation(activation)
+        self.conv2 = nn.Conv2d(2 * n_channels, n_channels, kernel_size=3, padding=1)
+
+    def __repr__(self):
+        return f"ResNetBlock(n_channels={self.conv1.in_channels})"
+
+    def forward(self, x, t):
+        # Expand the input:
+        h = self.norm1(x, t)
+        h = self.activation1(h)
+        h = self.conv1(h)
+
+        # (todo) Add time embedding:
+
+        # Collapse the input
+        h = self.norm2(h, t)
+        h = self.activation2(h)
+        h = self.conv2(h)
+
+        # Skip Connection:
+        h = h + x
+        return h
+
+
+class Up(nn.Module):
+    def __init__(self, in_channels, out_channels, time_embed_dim, activation="gelu"):
+        super().__init__()
+
+        self.resnet = ResNetBlock(
+            in_channels, time_embed_dim=time_embed_dim, activation=activation
+        )
+
+        self.convout = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+
         self.upsample = nn.Upsample(
             scale_factor=2, mode="bilinear", align_corners=False
         )
@@ -58,9 +99,9 @@ class Up(nn.Module):
 
     def forward(self, x, skip, t):
         # Process the input:
-        h = self.norm(x, t)
-        h = self.activation(h)
-        h = self.conv(h)
+        h = self.resnet(x, t)
+
+        h = self.convout(h)
 
         # Upsample:
         h = self.upsample(h)
@@ -73,14 +114,12 @@ class Up(nn.Module):
 class Down(nn.Module):
     def __init__(self, in_channels, out_channels, time_embed_dim, activation="gelu"):
         super().__init__()
-        self.norm = Normalization(
-            num_groups=1,
-            num_channels=in_channels,
-            time_embed_dim=time_embed_dim,
-            activation=activation,
+
+        self.resnet = ResNetBlock(
+            in_channels, time_embed_dim=time_embed_dim, activation=activation
         )
-        self.activation = _get_activation(activation)
-        self.conv = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+
+        self.convout = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
         self.pool = nn.AvgPool2d(2)
 
     def __repr__(self):
@@ -88,9 +127,9 @@ class Down(nn.Module):
 
     def forward(self, x, t):
         # Process the input:
-        h = self.norm(x, t)
-        h = self.activation(h)
-        h = self.conv(h)
+        h = self.resnet(x, t)
+
+        h = self.convout(h)
 
         # downsample:
         h = self.pool(h)
@@ -105,7 +144,7 @@ class UNet(nn.Module):
         time_scale,
         activation="gelu",
         n_freqs=32,
-        initial_hidden=1,
+        initial_hidden=8,
     ):
         super().__init__()
         channel_list = [initial_hidden * 2**i for i in range(n_steps)]

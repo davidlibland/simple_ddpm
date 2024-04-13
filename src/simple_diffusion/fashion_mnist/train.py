@@ -84,17 +84,18 @@ def train(
         ),
         device="cuda" if torch.cuda.is_available() else "cpu",
     )
-    val_dataset = DropLabels(
-        torchvision.datasets.FashionMNIST(
-            "./data", train=False, transform=transform, download=True
+    val_dataset = CachedDataset(
+        DropLabels(
+            torchvision.datasets.FashionMNIST(
+                "./data", train=False, transform=transform, download=True
+            ),
+            data_shrink_factor=100 if debug else None,
         ),
-        data_shrink_factor=100 if debug else None,
+        device="cuda" if torch.cuda.is_available() else "cpu",
     )
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(
-        val_dataset, batch_size=batch_size, shuffle=False, num_workers=3
-    )
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     # Setup the model:
     if beta_schedule_form == "geometric":
