@@ -6,7 +6,7 @@ import lightning as L
 import torch
 import torchvision
 import torchvision.transforms as transforms
-from lightning.pytorch.loggers import NeptuneLogger
+from lightning.pytorch.loggers import NeptuneLogger, TensorBoardLogger
 from torch.utils.data import Dataset, DataLoader
 
 from simple_diffusion.fashion_mnist.plotting import sample_plotter
@@ -125,28 +125,31 @@ def train(
     )
 
     # Setup the logger and the trainer:
-    neptune_logger = NeptuneLogger(
-        # api_key=NEPTUNE_API_TOKEN,  # replace with your own
-        project=NEPTUNE_PROJECT,  # format "workspace-name/project-name"
-        tags=["training", "diffusion", "gaussian_mixture"],  # optional
-        mode="async" if log_to_neptune else "debug",
+    # neptune_logger = NeptuneLogger(
+    #     # api_key=NEPTUNE_API_TOKEN,  # replace with your own
+    #     project=NEPTUNE_PROJECT,  # format "workspace-name/project-name"
+    #     tags=["training", "diffusion", "gaussian_mixture"],  # optional
+    #     mode="async" if log_to_neptune else "debug",
+    # )
+    logger = TensorBoardLogger("tb_logs", name="simplediffusion")
+    logger.log_hyperparams(
+        {
+            "batch_size": batch_size,
+            "n_epochs": n_epochs,
+            "n_steps": n_steps,
+            "beta_start": beta_schedule[0].item(),
+            "beta_end": beta_schedule[-1].item(),
+            "beta": beta,
+            "learning_rate": learning_rate,
+            "check_val_every_n_epoch": check_val_every_n_epoch,
+            "image_dim": IMAGE_DIM,
+            "seed": SEED,
+            "beta_schedule_form": beta_schedule_form,
+        }
     )
-    neptune_logger.run["training_params"] = {
-        "batch_size": batch_size,
-        "n_epochs": n_epochs,
-        "n_steps": n_steps,
-        "beta_start": beta_schedule[0],
-        "beta_end": beta_schedule[-1],
-        "beta": beta,
-        "learning_rate": learning_rate,
-        "check_val_every_n_epoch": check_val_every_n_epoch,
-        "image_dim": IMAGE_DIM,
-        "seed": SEED,
-        "beta_schedule_form": beta_schedule_form,
-    }
     trainer = L.Trainer(
         max_epochs=n_epochs,
-        logger=neptune_logger,
+        logger=logger,
         check_val_every_n_epoch=check_val_every_n_epoch,
     )
     trainer.fit(model, train_loader, val_loader)
@@ -158,8 +161,10 @@ def train(
         real=true_samples,
         fake=fake_samples,
     )
-
-    neptune_logger.run["samples"].upload(fig)
+    if hasattr(logger, "experiment"):
+        logger.experiment.add_image("samples", fig)
+    elif hasattr(logger, "run"):
+        logger.run["samples"].upload(fig)
 
 
 if __name__ == "__main__":
