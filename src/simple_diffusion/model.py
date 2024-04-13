@@ -204,7 +204,6 @@ class DiffusionModel(L.LightningModule):
 
     def generate(self, n, seed=None):
         """Generate samples from the diffusion model."""
-        breakpoint()
         if seed is not None:
             gen = torch.Generator()
             gen.manual_seed(seed)
