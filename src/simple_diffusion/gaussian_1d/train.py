@@ -72,20 +72,7 @@ def train(
     )
     trainer.fit(model, train_loader, val_loader)
 
-    alpha = model.alpha_schedule[-1].unsqueeze(-1)
-    latent_samples = (
-        (
-            torch.sqrt(1 - alpha) * torch.randn(len(train_dataset.samples), 1)
-            + torch.sqrt(alpha) * train_dataset.samples
-        )
-        .detach()
-        .cpu()
-        .numpy()
-    )
     true_samples = train_dataset.samples.detach().cpu().numpy()
-    fake_samples = (
-        trainer.model.generate(len(true_samples), seed=SEED).detach().cpu().numpy()
-    )
     fig = sample_plotter(
         real=train_dataset.samples.detach().cpu(),
         fake=trainer.model.generate(len(true_samples), seed=SEED).detach().cpu(),

@@ -80,22 +80,22 @@ class DiffusionModel(L.LightningModule):
         """The training step for the diffusion model."""
         loss, t = self._shared_step(batch)
         loss = loss.mean()
-        self.logger.log_metrics({"train/loss": loss})
+        self.log("train/loss", loss, prog_bar=True)
 
         # Misc logging:
         for name, param in self.named_parameters():
             if "tdense" in name:
-                self.logger.log_metrics({f"param/{name}": param.norm()})
+                self.log(f"param/{name}", param.norm())
         return loss
 
     def on_after_backward(self) -> None:
         """Log the gradient norm after the backward pass."""
         for name, param in self.named_parameters():
-            self.logger.log_metrics({f"grad/{name}": param.grad.norm()})
+            self.log(f"grad/{name}", param.grad.norm())
 
     def on_train_epoch_start(self) -> None:
         """Log the current epoch."""
-        self.logger.log_metrics({"epoch": self.trainer.current_epoch})
+        self.log("epoch", self.trainer.current_epoch)
 
     def _shared_step(self, batch):
         """The shared step for the training and validation steps."""
@@ -118,12 +118,12 @@ class DiffusionModel(L.LightningModule):
         # sample generation smooth across epochs:
         samples = self.generate(len(batch), seed=batch_idx)
         err = abs(samples.mean() - batch.mean())
-        self.logger.log_metrics({"val/mean_err": err})
+        self.log("val/mean_err", err)
         e_coeff = energy_coefficient(samples, batch)
-        self.logger.log_metrics({"val/energy_coeff": e_coeff})
+        self.log("val/energy_coeff", e_coeff)
         if batch_idx == 0 and self.sample_plotter is not None:
             fig = self.sample_plotter(batch, samples)
-            self.logger.run["val/samples"].append(fig)
+            self.log_image("val_images/samples", fig)
 
             # Add a scatter plot of losses at each time step:
             import matplotlib.pyplot as plt
@@ -160,7 +160,7 @@ class DiffusionModel(L.LightningModule):
                 color="black",
             )
             ax.set_title("Losses by Diffusion Step")
-            self.logger.run["val/losses_by_time"].append(fig)
+            self.log_image("val_images/losses_by_time", fig)
 
         if self.sample_metrics is not None:
             import timeit
@@ -171,8 +171,14 @@ class DiffusionModel(L.LightningModule):
                 metric.update(self.sample_metric_pre_process_fn(samples), real=False)
                 metric.update(self.sample_metric_pre_process_fn(batch), real=True)
                 end = timeit.default_timer()
-                self.logger.log_metrics({f"update_time/{k}": end - start})
+                self.log(f"update_time/{k}", end - start)
         return err
+
+    def log_image(self, name, fig):
+        if hasattr(self.logger, "run"):
+            self.logger.run[name].append(fig)
+        else:
+            self.logger.experiment.add_figure(name, fig)
 
     def on_validation_epoch_end(self):
         """Log the metrics at the end of the validation epoch."""
@@ -184,14 +190,12 @@ class DiffusionModel(L.LightningModule):
                 start = timeit.default_timer()
                 output = metric.compute()
                 if isinstance(output, tuple):
-                    self.logger.log_metrics(
-                        {f"{k}_mean": output[0], f"{k}_std": output[1]}
-                    )
+                    self.log_dict({f"{k}_mean": output[0], f"{k}_std": output[1]})
                 else:
-                    self.logger.log_metrics({k: output})
+                    self.log(k, output)
                 metric.reset()
                 end = timeit.default_timer()
-                self.logger.log_metrics({f"compute_time/{k}": end - start})
+                self.log(f"compute_time/{k}", end - start)
 
     def configure_optimizers(self):
         """The optimizer for the diffusion model."""
@@ -200,6 +204,7 @@ class DiffusionModel(L.LightningModule):
 
     def generate(self, n, seed=None):
         """Generate samples from the diffusion model."""
+        breakpoint()
         if seed is not None:
             gen = torch.Generator()
             gen.manual_seed(seed)

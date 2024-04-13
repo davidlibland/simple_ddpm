@@ -14,8 +14,9 @@ dependencies = [
     "matplotlib",
     "torch",
     "lightning",
-    "neptune",
+#    "neptune",
     "torchmetrics[image]",
+    "tensorboard",
 ]
 dynamic = ["version"]
 
