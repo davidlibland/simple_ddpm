@@ -38,6 +38,23 @@ class DropLabels(Dataset):
         return x
 
 
+class CachedDataset(Dataset):
+    """Move the dataset to the device and cache it."""
+
+    def __init__(self, dataset, device):
+        self.dataset = dataset
+        self.device = device
+        self.cache = None
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        if self.cache is None:
+            self.cache = torch.stack([x.to(self.device) for x in self.dataset], dim=0)
+        return self.cache[idx]
+
+
 def train(
     batch_size=2**11,
     n_epochs=500,
@@ -58,11 +75,14 @@ def train(
     )
 
     # Create datasets for training & validation, download if necessary
-    train_dataset = DropLabels(
-        torchvision.datasets.FashionMNIST(
-            "./data", train=True, transform=transform, download=True
+    train_dataset = CachedDataset(
+        DropLabels(
+            torchvision.datasets.FashionMNIST(
+                "./data", train=True, transform=transform, download=True
+            ),
+            data_shrink_factor=1000 if debug else None,
         ),
-        data_shrink_factor=1000 if debug else None,
+        device="cuda" if torch.cuda.is_available() else "cpu",
     )
     val_dataset = DropLabels(
         torchvision.datasets.FashionMNIST(
@@ -71,9 +91,7 @@ def train(
         data_shrink_factor=100 if debug else None,
     )
 
-    train_loader = DataLoader(
-        train_dataset, batch_size=batch_size, shuffle=True, num_workers=3
-    )
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(
         val_dataset, batch_size=batch_size, shuffle=False, num_workers=3
     )
