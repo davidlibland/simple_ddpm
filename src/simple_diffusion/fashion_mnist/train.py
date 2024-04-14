@@ -6,7 +6,7 @@ import lightning as L
 import torch
 import torchvision
 import torchvision.transforms as transforms
-from lightning.pytorch.loggers import NeptuneLogger, TensorBoardLogger
+from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import Dataset, DataLoader
 
 from simple_diffusion.fashion_mnist.plotting import sample_plotter
@@ -17,7 +17,7 @@ from simple_diffusion.model import DiffusionModel
 
 SEED = 1337
 NEPTUNE_PROJECT = "davidlibland/simplediffusion"
-IMAGE_DIM = 8
+IMAGE_DIM = 28
 
 # Set the seed:
 L.seed_everything(SEED)
@@ -58,9 +58,9 @@ class CachedDataset(Dataset):
 def train(
     batch_size=2**11,
     n_epochs=500,
-    n_steps=100,
+    n_steps=1000,
     check_val_every_n_epoch=100,
-    beta=0.3,
+    beta=0.02,
     log_to_neptune=True,
     learning_rate=3e-2,
     beta_schedule_form="geometric",
@@ -162,7 +162,7 @@ def train(
         fake=fake_samples,
     )
     if hasattr(logger, "experiment"):
-        logger.experiment.add_image("samples", fig)
+        logger.experiment.add_figure("samples", fig)
     elif hasattr(logger, "run"):
         logger.run["samples"].upload(fig)
 
