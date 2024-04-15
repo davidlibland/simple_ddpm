@@ -10,4 +10,5 @@ def test_fashion_mnist():
         batch_size=100,
         check_val_every_n_epoch=1,
         debug=True,
+        beta_schedule_form="linear",
     )

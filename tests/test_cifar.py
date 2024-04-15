@@ -10,4 +10,5 @@ def test_cifar_mnist():
         check_val_every_n_epoch=1,
         debug=True,
         beta=0.02,
+        beta_schedule_form="linear",
     )

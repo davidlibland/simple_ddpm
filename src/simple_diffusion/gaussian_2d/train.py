@@ -55,12 +55,16 @@ def train(
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
     # Setup the model:
-    beta_schedule = beta * ((1 - beta) ** (n_steps - torch.arange(n_steps)))
     model = DiffusionModel(
-        beta_schedule=beta_schedule,
         latent_shape=(2,),
         learning_rate=learning_rate,
         sample_plotter=sample_plotter,
+        diffusion_schedule_kwargs={
+            "schedule_type": "linear",
+            "beta_min": 1e-4,
+            "beta_max": beta,
+            "n_steps": n_steps,
+        },
     )
 
     # Setup the logger and the trainer:
@@ -87,23 +91,9 @@ def train(
     )
     trainer.fit(model, train_loader, val_loader)
 
-    alpha = model.alpha_schedule[-1].unsqueeze(-1)
-    latent_samples = (
-        (
-            torch.sqrt(1 - alpha) * torch.randn(len(train_dataset.samples), 1)
-            + torch.sqrt(alpha) * train_dataset.samples
-        )
-        .detach()
-        .cpu()
-        .numpy()
-    )
-    true_samples = train_dataset.samples.detach().cpu().numpy()
-    fake_samples = (
-        trainer.model.generate(len(true_samples), seed=SEED).detach().cpu().numpy()
-    )
     fig = sample_plotter(
         real=train_dataset.samples.detach().cpu(),
-        fake=trainer.model.generate(len(true_samples), seed=SEED).detach().cpu(),
+        fake=trainer.model.generate(len(train_dataset), seed=SEED).detach().cpu(),
     )
 
     neptune_logger.run["samples"].upload(fig)

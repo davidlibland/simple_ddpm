@@ -89,7 +89,7 @@ def train(
     check_val_every_n_epoch=100,
     beta=0.3,
     learning_rate=3e-2,
-    beta_schedule_form="geometric",
+    beta_schedule_form="linear",
     debug=False,
 ):
     # Compute the mean and std of the cifar channels:
@@ -138,11 +138,11 @@ def train(
 
     # Setup the model:
     if beta_schedule_form == "geometric":
+        raise NotImplementedError("Geometric schedule not implemented")
         beta_schedule = beta * ((1 - beta) ** (n_steps - torch.arange(n_steps)))
     elif beta_schedule_form == "linear":
         beta_start = 1e-4
         beta_end = beta
-        beta_schedule = torch.linspace(beta_start, beta_end, n_steps, dtype=torch.float)
     metrics = {
         # "fid": FrechetInceptionDistance(normalize=True, feature=64),
         # "kid": KernelInceptionDistance(
@@ -150,7 +150,6 @@ def train(
         # ),
     }
     model = DiffusionModel(
-        beta_schedule=beta_schedule,
         latent_shape=(3, IMAGE_DIM, IMAGE_DIM),
         learning_rate=learning_rate,
         sample_plotter=sample_plotter,
@@ -159,6 +158,12 @@ def train(
         type="unet",
         n_steps=3,
         n_channels=3,
+        diffusion_schedule_kwargs={
+            "schedule_type": beta_schedule_form,
+            "beta_min": beta_start,
+            "beta_max": beta_end,
+            "n_steps": n_steps,
+        },
     )
 
     # Setup the logger and the trainer:
@@ -187,9 +192,6 @@ def train(
 
     # Log the alpha and beta schedules, and the snr:
     fig = plot_snrs_from_model(model)
-    fig.savefig(
-        "/home/dlibland/dev/simple_diffusion/src/simple_diffusion/cifar/snr.png"
-    )
     log_figure("snr", fig, model.logger)
 
     trainer = L.Trainer(

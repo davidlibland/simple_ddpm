@@ -99,6 +99,7 @@ def train(
 
     # Setup the model:
     if beta_schedule_form == "geometric":
+        raise NotImplementedError("Geometric schedule not implemented")
         beta_schedule = beta * ((1 - beta) ** (n_steps - torch.arange(n_steps)))
     elif beta_schedule_form == "linear":
         beta_start = 1e-4
@@ -111,7 +112,6 @@ def train(
         # ),
     }
     model = DiffusionModel(
-        beta_schedule=beta_schedule,
         latent_shape=(1, IMAGE_DIM, IMAGE_DIM),
         learning_rate=learning_rate,
         sample_plotter=sample_plotter,
@@ -122,6 +122,12 @@ def train(
         type="unet",
         n_steps=3,
         n_channels=1,
+        diffusion_schedule_kwargs={
+            "schedule_type": beta_schedule_form,
+            "beta_min": beta_start,
+            "beta_max": beta_end,
+            "n_steps": n_steps,
+        },
     )
 
     # Setup the logger and the trainer:

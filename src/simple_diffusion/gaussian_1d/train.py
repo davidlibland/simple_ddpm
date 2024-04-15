@@ -53,9 +53,15 @@ def train(
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
     # Setup the model:
-    beta_schedule = beta * ((1 - beta) ** (n_steps - torch.arange(n_steps)))
     model = DiffusionModel(
-        beta_schedule=beta_schedule, latent_shape=(1,), sample_plotter=sample_plotter
+        latent_shape=(1,),
+        sample_plotter=sample_plotter,
+        diffusion_schedule_kwargs={
+            "schedule_type": "linear",
+            "beta_min": 1e-4,
+            "beta_max": beta,
+            "n_steps": n_steps,
+        },
     )
 
     # Setup the logger and the trainer:
