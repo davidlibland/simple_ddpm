@@ -49,6 +49,15 @@ class DiffusionModel(L.LightningModule):
         self.sample_metrics = sample_metrics
         self.sample_metric_pre_process_fn = sample_metric_pre_process_fn
 
+    def log_signal_to_noise(self):
+        """Compute the log signal to noise ratio of the denoiser."""
+
+        t = torch.arange(len(self.alpha_schedule))
+        signal = torch.sqrt(self.alpha_schedule)
+        noise = 1 - self.alpha_schedule
+        log_snr = torch.log(torch.square(signal) / noise)
+        return t, log_snr
+
     def _build_denoiser(self, **denoiser_kwargs):
         """Build the denoiser network."""
         denoiser_kwargs = {**denoiser_kwargs}
@@ -161,6 +170,7 @@ class DiffusionModel(L.LightningModule):
             )
             ax.set_title("Losses by Diffusion Step")
             self.log_image("val_images/losses_by_time", fig)
+            self.log_histogram("val_images/samples_hist", samples.flatten())
 
         if self.sample_metrics is not None:
             import timeit
@@ -178,7 +188,23 @@ class DiffusionModel(L.LightningModule):
         if hasattr(self.logger, "run"):
             self.logger.run[name].append(fig)
         else:
-            self.logger.experiment.add_figure(name, fig)
+            self.logger.experiment.add_figure(
+                name, fig, global_step=self.trainer.current_epoch
+            )
+
+    def log_histogram(self, name, values: torch.Tensor):
+        try:
+            # We're using tensorboard:
+            self.logger.experiment.add_histogram(
+                name, values, global_step=self.trainer.current_epoch
+            )
+        except:
+            # Log it as a figure:
+            import matplotlib.pyplot as plt
+
+            fig = plt.figure()
+            plt.hist(values.detach().cpu().numpy(), bins=100)
+            self.log_image(name, fig)
 
     def on_validation_epoch_end(self):
         """Log the metrics at the end of the validation epoch."""

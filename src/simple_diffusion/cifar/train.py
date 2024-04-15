@@ -3,13 +3,14 @@
 import itertools
 
 import lightning as L
+import matplotlib.pyplot as plt
 import torch
 import torchvision
-import torchvision.transforms as transforms
+import torchvision.transforms.v2 as transforms
 from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import Dataset, DataLoader
 
-from simple_diffusion.fashion_mnist.plotting import sample_plotter
+from simple_diffusion.cifar.plotting import get_sample_plotter
 from simple_diffusion.model import DiffusionModel
 
 # PyTorch TensorBoard support
@@ -17,7 +18,7 @@ from simple_diffusion.model import DiffusionModel
 
 SEED = 1337
 NEPTUNE_PROJECT = "davidlibland/simplediffusion"
-IMAGE_DIM = 28
+IMAGE_DIM = 32
 
 # Set the seed:
 L.seed_everything(SEED)
@@ -55,29 +56,64 @@ class CachedDataset(Dataset):
         return self.cache[idx]
 
 
+def log_figure(name, figure, logger):
+    """Log a figure to the logger."""
+    if hasattr(logger, "experiment"):
+        logger.experiment.add_figure(name, figure)
+    elif hasattr(logger, "run"):
+        logger.run[name].upload(figure)
+
+
+def plot_snrs_from_model(model) -> plt.Figure:
+    import matplotlib.pyplot as plt
+
+    t, log_snr = model.log_signal_to_noise()
+    signal = torch.sqrt(torch.sigmoid(log_snr))
+    noise = torch.sqrt(1 - signal)
+    fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+    ax[0].plot(t, signal, label="signal")
+    ax[0].plot(t, noise, label="noise")
+    ax[1].plot(t, log_snr, label="log snr", color="k", lw=2)
+    ax[1].set_xlabel("t")
+    ax[1].set_ylabel("SNR")
+    ax[0].legend()
+    # Add a title to the figure:
+    fig.suptitle("Signal and Noise in the Diffusion Process")
+    return fig
+
+
 def train(
     batch_size=2**11,
     n_epochs=500,
     n_steps=1000,
     check_val_every_n_epoch=100,
-    beta=0.02,
-    log_to_neptune=True,
+    beta=0.3,
     learning_rate=3e-2,
     beta_schedule_form="geometric",
     debug=False,
 ):
+    # Compute the mean and std of the cifar channels:
+    mean = 0.5
+    std = 0.5
+
+    def image_inv_transform(img):
+        return img.clip(min=-1, max=1) * std + mean
+
+    sample_plotter = get_sample_plotter(image_inv_transform)
+
     transform = transforms.Compose(
         [
-            transforms.ToTensor(),
+            transforms.ToImage(),
+            transforms.ToDtype(torch.float32, scale=True),
             transforms.Resize((IMAGE_DIM, IMAGE_DIM)),
-            transforms.Normalize((0.5,), (0.5,)),
+            transforms.Normalize((mean, mean, mean), (std, std, std)),
         ]
     )
 
     # Create datasets for training & validation, download if necessary
     train_dataset = CachedDataset(
         DropLabels(
-            torchvision.datasets.FashionMNIST(
+            torchvision.datasets.CIFAR10(
                 "./data", train=True, transform=transform, download=True
             ),
             data_shrink_factor=1000 if debug else None,
@@ -86,13 +122,16 @@ def train(
     )
     val_dataset = CachedDataset(
         DropLabels(
-            torchvision.datasets.FashionMNIST(
+            torchvision.datasets.CIFAR10(
                 "./data", train=False, transform=transform, download=True
             ),
             data_shrink_factor=100 if debug else None,
         ),
         device="cuda" if torch.cuda.is_available() else "cpu",
     )
+    # Check that images are normalized:
+    assert train_dataset[0].min() >= -1
+    assert train_dataset[0].max() <= 1
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
@@ -112,16 +151,14 @@ def train(
     }
     model = DiffusionModel(
         beta_schedule=beta_schedule,
-        latent_shape=(1, IMAGE_DIM, IMAGE_DIM),
+        latent_shape=(3, IMAGE_DIM, IMAGE_DIM),
         learning_rate=learning_rate,
         sample_plotter=sample_plotter,
         sample_metrics=None,  # metrics,
-        sample_metric_pre_process_fn=lambda gray_img: gray_img.repeat(1, 3, 1, 1).to(
-            "cpu"
-        ),
+        sample_metric_pre_process_fn=lambda img: img.to("cpu"),
         type="unet",
         n_steps=3,
-        n_channels=1,
+        n_channels=3,
     )
 
     # Setup the logger and the trainer:
@@ -147,6 +184,14 @@ def train(
             "beta_schedule_form": beta_schedule_form,
         }
     )
+
+    # Log the alpha and beta schedules, and the snr:
+    fig = plot_snrs_from_model(model)
+    fig.savefig(
+        "/home/dlibland/dev/simple_diffusion/src/simple_diffusion/cifar/snr.png"
+    )
+    log_figure("snr", fig, model.logger)
+
     trainer = L.Trainer(
         max_epochs=n_epochs,
         logger=logger,
@@ -161,11 +206,8 @@ def train(
         real=true_samples,
         fake=fake_samples,
     )
-    if hasattr(logger, "experiment"):
-        logger.experiment.add_figure("samples", fig)
-    elif hasattr(logger, "run"):
-        logger.run["samples"].upload(fig)
+    log_figure("samples", fig, logger)
 
 
 if __name__ == "__main__":
-    train(beta_schedule_form="linear", beta=0.02)
+    train(beta_schedule_form="linear", beta=0.02, debug=False)
