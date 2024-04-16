@@ -3,14 +3,13 @@
 import itertools
 
 import lightning as L
-import matplotlib.pyplot as plt
 import torch
 import torchvision
 import torchvision.transforms.v2 as transforms
 from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import Dataset, DataLoader
 
-from simple_diffusion.cifar.plotting import get_sample_plotter
+from simple_diffusion.cifar.plotting import get_sample_plotter, get_noisy_images_plotter
 from simple_diffusion.model import DiffusionModel
 
 # PyTorch TensorBoard support
@@ -64,24 +63,6 @@ def log_figure(name, figure, logger):
         logger.run[name].upload(figure)
 
 
-def plot_snrs_from_model(model) -> plt.Figure:
-    import matplotlib.pyplot as plt
-
-    t, log_snr = model.log_signal_to_noise()
-    signal = torch.sqrt(torch.sigmoid(log_snr))
-    noise = torch.sqrt(1 - signal)
-    fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-    ax[0].plot(t, signal, label="signal")
-    ax[0].plot(t, noise, label="noise")
-    ax[1].plot(t, log_snr, label="log snr", color="k", lw=2)
-    ax[1].set_xlabel("t")
-    ax[1].set_ylabel("SNR")
-    ax[0].legend()
-    # Add a title to the figure:
-    fig.suptitle("Signal and Noise in the Diffusion Process")
-    return fig
-
-
 def train(
     batch_size=2**11,
     n_epochs=500,
@@ -100,6 +81,7 @@ def train(
         return img.clip(min=-1, max=1) * std + mean
 
     sample_plotter = get_sample_plotter(image_inv_transform)
+    noisy_image_plotter = get_noisy_images_plotter(image_inv_transform)
 
     transform = transforms.Compose(
         [
@@ -164,6 +146,7 @@ def train(
             "beta_max": beta_end,
             "n_steps": n_steps,
         },
+        noisy_image_plotter=noisy_image_plotter,
     )
 
     # Setup the logger and the trainer:
@@ -179,9 +162,6 @@ def train(
             "batch_size": batch_size,
             "n_epochs": n_epochs,
             "n_steps": n_steps,
-            "beta_start": beta_schedule[0].item(),
-            "beta_end": beta_schedule[-1].item(),
-            "beta": beta,
             "learning_rate": learning_rate,
             "check_val_every_n_epoch": check_val_every_n_epoch,
             "image_dim": IMAGE_DIM,
@@ -189,10 +169,6 @@ def train(
             "beta_schedule_form": beta_schedule_form,
         }
     )
-
-    # Log the alpha and beta schedules, and the snr:
-    fig = plot_snrs_from_model(model)
-    log_figure("snr", fig, model.logger)
 
     trainer = L.Trainer(
         max_epochs=n_epochs,

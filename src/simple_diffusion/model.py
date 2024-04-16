@@ -3,6 +3,7 @@
 from typing import Dict, Callable, Tuple
 
 import lightning as L
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -47,6 +48,8 @@ class LinearDiffusionSchedule(nn.Module):
         return {
             "alpha": scale_t_2,
             "beta": beta_t,
+            "1-alpha": var_t,
+            "1-beta": scale_t_2 / scale_s_2,
         }
 
 
@@ -59,6 +62,7 @@ class DiffusionModel(L.LightningModule):
         sample_metrics: Dict[str, Metric] = None,
         sample_metric_pre_process_fn: Callable = None,
         diffusion_schedule_kwargs: Dict = {},
+        noisy_image_plotter=None,
         **denoiser_kwargs,
     ):
         """
@@ -76,7 +80,12 @@ class DiffusionModel(L.LightningModule):
         """
         super().__init__()
         self.save_hyperparameters(
-            ignore=["sample_plotter", "metrics", "sample_metric_pre_process_fn"]
+            ignore=[
+                "sample_plotter",
+                "metrics",
+                "sample_metric_pre_process_fn",
+                "noisy_image_plotter",
+            ]
         )
         self.diffusion_schedule = self._build_diffusion_schedule(
             **diffusion_schedule_kwargs
@@ -85,11 +94,22 @@ class DiffusionModel(L.LightningModule):
         self.sample_plotter = sample_plotter
         self.sample_metrics = sample_metrics
         self.sample_metric_pre_process_fn = sample_metric_pre_process_fn
+        self.noisy_image_plotter = noisy_image_plotter
 
     def log_signal_to_noise(self):
         """Compute the log signal to noise ratio of the denoiser."""
         t = torch.arange(0, self.diffusion_schedule.n_steps)
         return t, self.diffusion_schedule.log_signal_to_noise()
+
+    def generative_variance_at_zero_mean(self):
+        """Compute the variance at time 0."""
+        var = 1
+        for t in range(self.diffusion_schedule.n_steps - 1, 0, -1):
+            t = torch.tensor(t).to(self.device)
+            beta = self.diffusion_schedule(t)["beta"].detach().cpu().numpy()
+            one_m_beta = self.diffusion_schedule(t)["1-beta"].detach().cpu().numpy()
+            var = var / one_m_beta + beta
+        return var
 
     def _build_denoiser(self, **denoiser_kwargs):
         """Build the denoiser network."""
@@ -118,13 +138,9 @@ class DiffusionModel(L.LightningModule):
         """The decoder network, defined in terms of the denoiser."""
         schedule = self.diffusion_schedule(t)
         beta = schedule["beta"]
-        alpha = schedule["alpha"]
         noise_est = self.denoiser(z, t.expand(z.shape[0], *t.shape[1:]))
-        if 1 - alpha == 0:
-            factor = beta / torch.sqrt(torch.sum(beta[:t]))
-        else:
-            factor = beta / torch.sqrt(1 - alpha)
-        return (z - factor * noise_est) / torch.sqrt(1 - beta)
+        factor = beta / torch.sqrt(schedule["1-alpha"])
+        return (z - factor * noise_est) / torch.sqrt(schedule["1-beta"])
 
     def training_step(self, batch):
         """The training step for the diffusion model."""
@@ -152,15 +168,35 @@ class DiffusionModel(L.LightningModule):
         x = batch
         n = x.shape[0]
         t = torch.randint(1, self.diffusion_schedule.n_steps, (n,)).to(x.device)
+        z, t, eps = self.add_noise(x, t)
+        eps_tilde = self.denoiser(z, t)
+        loss = F.mse_loss(eps_tilde, eps, reduction="none")
+        return loss, t
+
+    def add_noise(self, x, t):
         while len(t.shape) < len(x.shape):
             t = t.unsqueeze(-1)
         assert (t != 0).all()
         eps = torch.randn_like(x)
-        alpha = self.diffusion_schedule(t)["alpha"]
-        z = torch.sqrt(alpha) * x + torch.sqrt(1 - alpha) * eps
-        eps_tilde = self.denoiser(z, t)
-        loss = F.mse_loss(eps_tilde, eps, reduction="none")
-        return loss, t
+        schedule = self.diffusion_schedule(t)
+        z = torch.sqrt(schedule["alpha"]) * x + torch.sqrt(schedule["1-alpha"]) * eps
+        return z, t, eps
+
+    def plot_snrs(self) -> plt.Figure:
+        t, log_snr = self.log_signal_to_noise()
+        t = t.detach().cpu().numpy()
+        signal = torch.sqrt(torch.sigmoid(log_snr))
+        noise = torch.sqrt(1 - signal)
+        fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+        ax[0].plot(t, signal.detach().cpu().numpy(), label="signal")
+        ax[0].plot(t, noise.detach().cpu().numpy(), label="noise")
+        ax[1].plot(t, log_snr.detach().cpu().numpy(), label="log snr", color="k", lw=2)
+        ax[1].set_xlabel("t")
+        ax[1].set_ylabel("SNR")
+        ax[0].legend()
+        # Add a title to the figure:
+        fig.suptitle("Signal and Noise in the Diffusion Process")
+        return fig
 
     def validation_step(self, batch, batch_idx):
         """The validation step for the diffusion model."""
@@ -176,7 +212,6 @@ class DiffusionModel(L.LightningModule):
             self.log_image("val_images/samples", fig)
 
             # Add a scatter plot of losses at each time step:
-            import matplotlib.pyplot as plt
 
             loss, t = self._shared_step(batch)
             loss = loss.view(loss.size(0), -1).mean(1)
@@ -213,6 +248,24 @@ class DiffusionModel(L.LightningModule):
             self.log_image("val_images/losses_by_time", fig)
             self.log_histogram("val_images/samples_hist", samples.flatten())
 
+            fig = self.plot_snrs()
+            self.log_image("val_images/snr", fig)
+
+            if self.noisy_image_plotter is not None:
+                # Plot the noise:
+                noisy_images = []
+                for t in range(
+                    1,
+                    self.diffusion_schedule.n_steps,
+                    self.diffusion_schedule.n_steps // 10,
+                ):
+                    z, *_ = self.add_noise(
+                        batch[:10], t * torch.ones(10, dtype=torch.long)
+                    )
+                    noisy_images.append(z)
+                fig = self.noisy_image_plotter(noisy_images)
+                self.log_image(f"val_images/noise_{t}", fig)
+
         if self.sample_metrics is not None:
             import timeit
 
@@ -246,6 +299,10 @@ class DiffusionModel(L.LightningModule):
         fig = plt.figure()
         plt.hist(values.detach().cpu().numpy(), bins=100)
         self.log_image(f"{name}_plt", fig)
+
+    def on_train_epoch_end(self) -> None:
+        generative_var = self.generative_variance_at_zero_mean()
+        self.log("train/generative_variance", generative_var)
 
     def on_validation_epoch_end(self):
         """Log the metrics at the end of the validation epoch."""
