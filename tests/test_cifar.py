@@ -1,7 +1,7 @@
 from simple_diffusion.cifar.train import train
 
 
-def test_cifar_mnist():
+def test_cifar():
     """A smoke test for the cifar diffusion model."""
     train(
         n_steps=100,

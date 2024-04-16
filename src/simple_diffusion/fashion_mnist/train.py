@@ -104,7 +104,21 @@ def train(
     elif beta_schedule_form == "linear":
         beta_start = 1e-4
         beta_end = beta
-        beta_schedule = torch.linspace(beta_start, beta_end, n_steps, dtype=torch.float)
+        diffusion_schedule_kwargs = {
+            "schedule_type": beta_schedule_form,
+            "beta_min": beta_start,
+            "beta_max": beta_end,
+            "n_steps": n_steps,
+        }
+    elif beta_schedule_form == "logit_linear":
+        log_snr_min = -6
+        log_snr_max = 6
+        diffusion_schedule_kwargs = {
+            "schedule_type": beta_schedule_form,
+            "log_snr_min": log_snr_min,
+            "log_snr_max": log_snr_max,
+            "n_steps": n_steps,
+        }
     metrics = {
         # "fid": FrechetInceptionDistance(normalize=True, feature=64),
         # "kid": KernelInceptionDistance(
@@ -122,12 +136,7 @@ def train(
         type="unet",
         n_steps=3,
         n_channels=1,
-        diffusion_schedule_kwargs={
-            "schedule_type": beta_schedule_form,
-            "beta_min": beta_start,
-            "beta_max": beta_end,
-            "n_steps": n_steps,
-        },
+        diffusion_schedule_kwargs=diffusion_schedule_kwargs,
     )
 
     # Setup the logger and the trainer:
@@ -143,8 +152,6 @@ def train(
             "batch_size": batch_size,
             "n_epochs": n_epochs,
             "n_steps": n_steps,
-            "beta_start": beta_schedule[0].item(),
-            "beta_end": beta_schedule[-1].item(),
             "beta": beta,
             "learning_rate": learning_rate,
             "check_val_every_n_epoch": check_val_every_n_epoch,

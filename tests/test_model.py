@@ -1,7 +1,7 @@
 import pytest
 import torch.testing
 
-from src.simple_diffusion.model import LinearDiffusionSchedule
+from simple_diffusion.model import LinearDiffusionSchedule
 
 
 @pytest.mark.parametrize(

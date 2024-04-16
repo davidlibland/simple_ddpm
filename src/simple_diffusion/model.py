@@ -53,6 +53,36 @@ class LinearDiffusionSchedule(nn.Module):
         }
 
 
+class LogitLinearSNR(nn.Module):
+    def __init__(self, log_snr_min=-6, log_snr_max=6, n_steps=100):
+        super().__init__()
+
+        log_snr = torch.linspace(log_snr_max, log_snr_min, n_steps, dtype=torch.float)
+        self.register_buffer("log_snr", log_snr)
+
+    @property
+    def n_steps(self):
+        return len(self.log_snr)
+
+    def log_signal_to_noise(self):
+        """Returns the log signal to noise ratio."""
+        return self.log_snr
+
+    def forward(self, t):
+        """Returns the signal at time t"""
+        scale_t_2 = torch.sigmoid(self.log_snr[t])
+        var_t = torch.sigmoid(-self.log_snr[t])
+        beta_t = -torch.expm1(self.log_snr[t] - self.log_snr[t - 1]) * torch.sigmoid(
+            -self.log_snr[t]
+        )
+        return {
+            "alpha": scale_t_2,
+            "beta": beta_t,
+            "1-alpha": var_t,
+            "1-beta": 1 - beta_t,
+        }
+
+
 class DiffusionModel(L.LightningModule):
     def __init__(
         self,
@@ -131,6 +161,8 @@ class DiffusionModel(L.LightningModule):
         """Build the denoiser network."""
         if schedule_type == "linear":
             return LinearDiffusionSchedule(**kwargs)
+        elif schedule_type == "logit_linear":
+            return LogitLinearSNR(**kwargs)
         else:
             raise NotImplementedError(f"Schedule type {schedule_type} not implemented.")
 
@@ -182,20 +214,58 @@ class DiffusionModel(L.LightningModule):
         z = torch.sqrt(schedule["alpha"]) * x + torch.sqrt(schedule["1-alpha"]) * eps
         return z, t, eps
 
-    def plot_snrs(self) -> plt.Figure:
+    def plot_snrs(self, loss_locs, loss_vals) -> plt.Figure:
         t, log_snr = self.log_signal_to_noise()
         t = t.detach().cpu().numpy()
         signal = torch.sqrt(torch.sigmoid(log_snr))
-        noise = torch.sqrt(1 - signal)
-        fig, ax = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-        ax[0].plot(t, signal.detach().cpu().numpy(), label="signal")
-        ax[0].plot(t, noise.detach().cpu().numpy(), label="noise")
-        ax[1].plot(t, log_snr.detach().cpu().numpy(), label="log snr", color="k", lw=2)
-        ax[1].set_xlabel("t")
-        ax[1].set_ylabel("SNR")
-        ax[0].legend()
+        noise = torch.sqrt(torch.sigmoid(-log_snr))
+
+        fig, ax = plt.subplots(2, 2, figsize=(12, 16), sharex=True)
+        ax[0, 0].plot(t, signal.detach().cpu().numpy(), label="signal")
+        ax[0, 0].plot(t, noise.detach().cpu().numpy(), label="noise")
+        ax[1, 0].plot(
+            t, log_snr.detach().cpu().numpy(), label="log snr", color="k", lw=2
+        )
+        ax[1, 0].set_xlabel("t")
+        ax[1, 0].set_ylabel("SNR")
+        ax[0, 0].legend()
+
+        log_snr_diffs = torch.diff(log_snr)
+        incremental_noise = -torch.expm1(log_snr_diffs) * torch.sigmoid(-log_snr[1:])
+        ax[0, 1].plot(t[1:], incremental_noise.detach().cpu().numpy(), label="beta")
+        ax[0, 1].set_ylabel(r"$\beta$")
+        ax[1, 1].scatter(
+            x=loss_locs.detach().cpu().numpy().flatten(),
+            y=loss_vals.detach().cpu().numpy().flatten(),
+            alpha=0.5,
+        )
+        ax[1, 1].set_xlabel("t")
+        ax[1, 1].set_ylabel("MSE Loss")
+        # add a tick at the last time step:
+        ax[1, 1].text(
+            1,
+            0.5,
+            "noise",
+            horizontalalignment="right",
+            verticalalignment="center",
+            transform=ax[1, 1].transAxes,
+            fontsize=12,
+            color="black",
+        )
+        ax[1, 1].text(
+            0,
+            0.5,
+            "image",
+            horizontalalignment="left",
+            verticalalignment="center",
+            transform=ax[1, 1].transAxes,
+            fontsize=12,
+            color="black",
+        )
+        ax[1, 1].set_title("Losses by Diffusion Step")
+
         # Add a title to the figure:
-        fig.suptitle("Signal and Noise in the Diffusion Process")
+        fig.suptitle("Signal, Noise, and Errors in the Diffusion Process")
         return fig
 
     def validation_step(self, batch, batch_idx):
@@ -211,45 +281,15 @@ class DiffusionModel(L.LightningModule):
             fig = self.sample_plotter(batch, samples)
             self.log_image("val_images/samples", fig)
 
+            self.log_histogram("val_images/samples_hist", samples.flatten())
+
             # Add a scatter plot of losses at each time step:
 
             loss, t = self._shared_step(batch)
             loss = loss.view(loss.size(0), -1).mean(1)
 
-            fig, ax = plt.subplots()
-            ax.scatter(
-                x=t.detach().cpu().numpy().flatten(),
-                y=loss.detach().cpu().numpy().flatten(),
-            )
-            ax.set_xlabel("Diffusion Step")
-            ax.set_ylabel("MSE Loss")
-            # add a tick at the last time step:
-            plt.text(
-                1,
-                0.5,
-                "noise",
-                horizontalalignment="right",
-                verticalalignment="center",
-                transform=ax.transAxes,
-                fontsize=12,
-                color="black",
-            )
-            plt.text(
-                0,
-                0.5,
-                "image",
-                horizontalalignment="left",
-                verticalalignment="center",
-                transform=ax.transAxes,
-                fontsize=12,
-                color="black",
-            )
-            ax.set_title("Losses by Diffusion Step")
+            fig = self.plot_snrs(t, loss)
             self.log_image("val_images/losses_by_time", fig)
-            self.log_histogram("val_images/samples_hist", samples.flatten())
-
-            fig = self.plot_snrs()
-            self.log_image("val_images/snr", fig)
 
             if self.noisy_image_plotter is not None:
                 # Plot the noise:
