@@ -1,6 +1,8 @@
 """A unet for image denoising."""
 
 import torch
+import torch.nn.functional as F
+from einops import rearrange
 from torch import nn
 
 
@@ -39,23 +41,35 @@ class Normalization(nn.Module):
 
 
 class ResNetBlock(nn.Module):
-    def __init__(self, n_channels, time_embed_dim, activation="gelu"):
+    def __init__(self, n_channels, time_embed_dim, activation="gelu", time_norm=False):
         super().__init__()
-        self.norm1 = Normalization(
-            num_groups=1,
-            num_channels=n_channels,
-            time_embed_dim=time_embed_dim,
-            activation=activation,
-        )
+        self.time_norm = time_norm
+        if self.time_norm:
+            self.norm1 = Normalization(
+                num_groups=1,
+                num_channels=n_channels,
+                time_embed_dim=time_embed_dim,
+                activation=activation,
+            )
+        else:
+            self.norm1 = nn.GroupNorm(
+                num_groups=1,
+                num_channels=n_channels,
+            )
         self.activation1 = _get_activation(activation)
         self.conv1 = nn.Conv2d(n_channels, 2 * n_channels, kernel_size=3, padding=1)
 
-        self.norm2 = Normalization(
-            num_groups=1,
-            num_channels=2 * n_channels,
-            time_embed_dim=time_embed_dim,
-            activation=activation,
-        )
+        self.tdense = nn.Linear(time_embed_dim, 2 * n_channels)
+
+        if self.time_norm:
+            self.norm2 = Normalization(
+                num_groups=1,
+                num_channels=2 * n_channels,
+                time_embed_dim=time_embed_dim,
+                activation=activation,
+            )
+        else:
+            self.norm2 = nn.GroupNorm(num_groups=1, num_channels=2 * n_channels)
         self.activation2 = _get_activation(activation)
         self.conv2 = nn.Conv2d(2 * n_channels, n_channels, kernel_size=3, padding=1)
 
@@ -64,14 +78,21 @@ class ResNetBlock(nn.Module):
 
     def forward(self, x, t):
         # Expand the input:
-        h = self.norm1(x, t)
+        if self.time_norm:
+            h = self.norm1(x, t)
+        else:
+            h = self.norm1(x)
         h = self.activation1(h)
         h = self.conv1(h)
 
         # (todo) Add time embedding:
+        h = h + self.tdense(t)[:, :, None, None]
 
         # Collapse the input
-        h = self.norm2(h, t)
+        if self.time_norm:
+            h = self.norm2(h, t)
+        else:
+            h = self.norm2(h)
         h = self.activation2(h)
         h = self.conv2(h)
 
@@ -111,6 +132,63 @@ class Up(nn.Module):
         return h
 
 
+class ChannelAttention(nn.Module):
+    def __init__(self, in_channels, n_heads=8, n_freqs=32):
+        super().__init__()
+        if in_channels % n_heads != 0:
+            raise ValueError(
+                f"Number of heads {n_heads} must divide number of channels {in_channels}"
+            )
+        self.norm = nn.GroupNorm(num_groups=1, num_channels=in_channels)
+        self.conv = nn.Conv2d(in_channels + 2 * n_freqs, in_channels * 3, kernel_size=1)
+        self.scale = in_channels**-0.5
+        self.n_heads = n_heads
+        self.register_buffer(
+            "fourier_freqs",
+            torch.arange(1, n_freqs, 2).float() / (2 * n_freqs),
+        )
+
+    def forward(self, x):
+        x = self.norm(x)
+        w = x.size(-1)
+        h = x.size(-2)
+        tw = torch.arange(w, device=x.device).float() / w
+        th = torch.arange(h, device=x.device).float() / h
+        th = self.encode_time(th.view([1, 1, -1, 1])).expand(
+            x.size(0), -1, -1, x.size(-1)
+        )
+        tw = self.encode_time(tw.view([1, 1, 1, -1])).expand(
+            x.size(0), -1, x.size(-2), -1
+        )
+        x_loc_emb = torch.cat(
+            [x, th, tw],
+            dim=1,
+        )
+        qkv = self.conv(x_loc_emb)
+        qkv = torch.chunk(qkv, 3, dim=1)
+        q, k, v = [
+            rearrange(
+                t,
+                "b (heads c) h w -> b heads (h w) c",
+                heads=self.n_heads,
+            )
+            for t in qkv
+        ]
+        attn = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
+        return rearrange(
+            attn, "b heads (h w) c -> b (heads c) h w", h=x.size(-2), w=x.size(-1)
+        )
+
+    def encode_time(self, t):
+        return torch.cat(
+            [
+                torch.sin(t * self.fourier_freqs.view([1, -1, 1, 1]) * 2 * torch.pi),
+                torch.cos(t * self.fourier_freqs.view([1, -1, 1, 1]) * 2 * torch.pi),
+            ],
+            dim=1,
+        )
+
+
 class Down(nn.Module):
     def __init__(self, in_channels, out_channels, time_embed_dim, activation="gelu"):
         super().__init__()
@@ -145,8 +223,10 @@ class UNet(nn.Module):
         activation="gelu",
         n_freqs=32,
         initial_hidden=8,
+        attn=True,
     ):
         super().__init__()
+        self.attn = attn
         channel_list = [initial_hidden * 2**i for i in range(n_steps)]
         self.register_buffer(
             "fourier_freqs",
@@ -180,7 +260,10 @@ class UNet(nn.Module):
         )
 
         # Middle Steps
-        self.middle = nn.Identity()
+        if self.attn:
+            self.middle = ChannelAttention(channel_list[-1], n_heads=8)
+        else:
+            self.middle = nn.Identity()
 
         # Up steps
         self.ups = nn.ModuleList(
@@ -221,7 +304,11 @@ class UNet(nn.Module):
         for down in self.downs:
             skips.append(x)
             x = down(x, temb)
-        x = self.middle(x)
+        if self.attn:
+            h = self.middle(x)
+            x = x + h
+        else:
+            x = self.middle(x)
         for up, skip in zip(self.ups, reversed(skips)):
             x = up(x, skip, temb)
         x = self.out_norm(x, temb)

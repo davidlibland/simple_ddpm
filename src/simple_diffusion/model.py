@@ -363,7 +363,7 @@ class DiffusionModel(L.LightningModule):
 
     def configure_optimizers(self):
         """The optimizer for the diffusion model."""
-        optimizer = torch.optim.Adam(self.parameters())
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
         return optimizer
 
     def generate(self, n, seed=None):

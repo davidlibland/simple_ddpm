@@ -69,7 +69,7 @@ def train(
     n_steps=1000,
     check_val_every_n_epoch=100,
     beta=0.3,
-    learning_rate=3e-2,
+    learning_rate=3e-4,
     beta_schedule_form="linear",
     debug=False,
 ):
