@@ -11,4 +11,5 @@ def test_cifar():
         debug=True,
         beta=0.02,
         beta_schedule_form="linear",
+        step_depth=3,
     )

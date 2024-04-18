@@ -101,37 +101,6 @@ class ResNetBlock(nn.Module):
         return h
 
 
-class Up(nn.Module):
-    def __init__(self, in_channels, out_channels, time_embed_dim, activation="gelu"):
-        super().__init__()
-
-        self.resnet = ResNetBlock(
-            in_channels, time_embed_dim=time_embed_dim, activation=activation
-        )
-
-        self.convout = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
-
-        self.upsample = nn.Upsample(
-            scale_factor=2, mode="bilinear", align_corners=False
-        )
-
-    def __repr__(self):
-        return f"Up(in_channels={self.conv.in_channels}, out_channels={self.conv.out_channels})"
-
-    def forward(self, x, skip, t):
-        # Process the input:
-        h = self.resnet(x, t)
-
-        h = self.convout(h)
-
-        # Upsample:
-        h = self.upsample(h)
-
-        # Add the skip connection:
-        h = h + skip
-        return h
-
-
 class ChannelAttention(nn.Module):
     def __init__(self, in_channels, n_heads=8, n_freqs=32):
         super().__init__()
@@ -149,7 +118,7 @@ class ChannelAttention(nn.Module):
         )
 
     def forward(self, x):
-        x = self.norm(x)
+        x_norm = self.norm(x)
         w = x.size(-1)
         h = x.size(-2)
         tw = torch.arange(w, device=x.device).float() / w
@@ -161,7 +130,7 @@ class ChannelAttention(nn.Module):
             x.size(0), -1, x.size(-2), -1
         )
         x_loc_emb = torch.cat(
-            [x, th, tw],
+            [x_norm, th, tw],
             dim=1,
         )
         qkv = self.conv(x_loc_emb)
@@ -175,9 +144,10 @@ class ChannelAttention(nn.Module):
             for t in qkv
         ]
         attn = F.scaled_dot_product_attention(q, k, v, scale=self.scale)
-        return rearrange(
+        attn = rearrange(
             attn, "b heads (h w) c -> b (heads c) h w", h=x.size(-2), w=x.size(-1)
         )
+        return x + attn
 
     def encode_time(self, t):
         return torch.cat(
@@ -189,12 +159,92 @@ class ChannelAttention(nn.Module):
         )
 
 
-class Down(nn.Module):
-    def __init__(self, in_channels, out_channels, time_embed_dim, activation="gelu"):
+class Up(nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        time_embed_dim,
+        activation="gelu",
+        depth=1,
+        attn=False,
+    ):
         super().__init__()
 
-        self.resnet = ResNetBlock(
-            in_channels, time_embed_dim=time_embed_dim, activation=activation
+        self.resnets = nn.ModuleList(
+            [
+                ResNetBlock(
+                    in_channels, time_embed_dim=time_embed_dim, activation=activation
+                )
+                for _ in range(depth)
+            ]
+        )
+        self.attns = nn.ModuleList(
+            [
+                (
+                    ChannelAttention(in_channels, n_heads=8, n_freqs=32)
+                    if attn
+                    else nn.Identity()
+                )
+                for _ in range(depth)
+            ]
+        )
+
+        self.convout = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
+
+        self.upsample = nn.Upsample(
+            scale_factor=2, mode="bilinear", align_corners=False
+        )
+
+    def __repr__(self):
+        return f"Up(in_channels={self.conv.in_channels}, out_channels={self.conv.out_channels})"
+
+    def forward(self, x, skip, t):
+        # Process the input:
+        h = x
+        for resnet, attn in zip(self.resnets, self.attns):
+            h = resnet(h, t)
+            h = attn(h)
+
+        h = self.convout(h)
+
+        # Upsample:
+        h = self.upsample(h)
+
+        # Add the skip connection:
+        h = h + skip
+        return h
+
+
+class Down(nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        time_embed_dim,
+        activation="gelu",
+        depth=1,
+        attn=False,
+    ):
+        super().__init__()
+
+        self.resnets = nn.ModuleList(
+            [
+                ResNetBlock(
+                    in_channels, time_embed_dim=time_embed_dim, activation=activation
+                )
+                for _ in range(depth)
+            ]
+        )
+        self.attns = nn.ModuleList(
+            [
+                (
+                    ChannelAttention(in_channels, n_heads=8, n_freqs=32)
+                    if attn
+                    else nn.Identity()
+                )
+                for _ in range(depth)
+            ]
         )
 
         self.convout = nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1)
@@ -205,7 +255,10 @@ class Down(nn.Module):
 
     def forward(self, x, t):
         # Process the input:
-        h = self.resnet(x, t)
+        h = x
+        for resnet, attn in zip(self.resnets, self.attns):
+            h = resnet(h, t)
+            h = attn(h)
 
         h = self.convout(h)
 
@@ -217,17 +270,19 @@ class Down(nn.Module):
 class UNet(nn.Module):
     def __init__(
         self,
-        n_steps,
+        u_steps,
+        step_depth,
         n_channels,
         time_scale,
         activation="gelu",
         n_freqs=32,
         initial_hidden=8,
-        attn=True,
+        mid_attn=True,
+        attn_resolutions=(1,),
     ):
         super().__init__()
-        self.attn = attn
-        channel_list = [initial_hidden * 2**i for i in range(n_steps)]
+        self.attn = mid_attn
+        channel_list = [initial_hidden * 2**i for i in range(u_steps)]
         self.register_buffer(
             "fourier_freqs",
             torch.arange(1, n_freqs, 2).float() / (2 * n_freqs) / time_scale,
@@ -252,14 +307,37 @@ class UNet(nn.Module):
                     out_channels,
                     time_embed_dim=n_freqs,
                     activation=activation,
+                    depth=step_depth,
+                    attn=i in attn_resolutions,
                 )
-                for in_channels, out_channels in zip(
-                    channel_list[:-1], channel_list[1:]
+                for i, (in_channels, out_channels) in enumerate(
+                    zip(channel_list[:-1], channel_list[1:])
                 )
             ]
         )
 
         # Middle Steps
+
+        self.pre_middle = nn.ModuleList(
+            [
+                ResNetBlock(
+                    channel_list[-1],
+                    time_embed_dim=n_freqs,
+                    activation=activation,
+                )
+                for _ in range(step_depth - 1)
+            ]
+        )
+        self.post_middle = nn.ModuleList(
+            [
+                ResNetBlock(
+                    channel_list[-1],
+                    time_embed_dim=n_freqs,
+                    activation=activation,
+                )
+                for _ in range(step_depth - 1)
+            ]
+        )
         if self.attn:
             self.middle = ChannelAttention(channel_list[-1], n_heads=8)
         else:
@@ -273,9 +351,11 @@ class UNet(nn.Module):
                     out_channels,
                     time_embed_dim=n_freqs,
                     activation=activation,
+                    depth=step_depth,
+                    attn=i in attn_resolutions,
                 )
-                for in_channels, out_channels in reversed(
-                    list(zip(channel_list[1:], channel_list[:-1]))
+                for i, (in_channels, out_channels) in reversed(
+                    list(enumerate(zip(channel_list[1:], channel_list[:-1])))
                 )
             ]
         )
@@ -304,11 +384,11 @@ class UNet(nn.Module):
         for down in self.downs:
             skips.append(x)
             x = down(x, temb)
-        if self.attn:
-            h = self.middle(x)
-            x = x + h
-        else:
-            x = self.middle(x)
+        for resnet in self.pre_middle:
+            x = resnet(x, temb)
+        x = self.middle(x)
+        for resnet in self.post_middle:
+            x = resnet(x, temb)
         for up, skip in zip(self.ups, reversed(skips)):
             x = up(x, skip, temb)
         x = self.out_norm(x, temb)

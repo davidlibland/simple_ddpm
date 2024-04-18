@@ -134,7 +134,8 @@ def train(
             "cpu"
         ),
         type="unet",
-        n_steps=3,
+        u_steps=3,
+        step_depth=1,
         n_channels=1,
         diffusion_schedule_kwargs=diffusion_schedule_kwargs,
     )

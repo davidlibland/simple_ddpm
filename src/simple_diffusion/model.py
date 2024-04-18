@@ -270,53 +270,65 @@ class DiffusionModel(L.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         """The validation step for the diffusion model."""
-        # Have the same seed as the batch, to keep
-        # sample generation smooth across epochs:
-        samples = self.generate(len(batch), seed=batch_idx)
-        err = abs(samples.mean() - batch.mean())
-        self.log("val/mean_err", err)
-        e_coeff = energy_coefficient(samples, batch)
-        self.log("val/energy_coeff", e_coeff)
-        if batch_idx == 0 and self.sample_plotter is not None:
-            fig = self.sample_plotter(batch, samples)
-            self.log_image("val_images/samples", fig)
 
-            self.log_histogram("val_images/samples_hist", samples.flatten())
+        loss, t = self._shared_step(batch)
+        generate_samples = any(
+            [
+                self.sample_metrics is not None,
+                batch_idx == 0 and self.sample_plotter is not None,
+            ]
+        )
+        if generate_samples:
+            # Have the same seed as the batch, to keep
+            # sample generation smooth across epochs:
+            samples = self.generate(len(batch), seed=batch_idx)
+            err = abs(samples.mean() - batch.mean())
+            self.log("val/mean_err", err)
+            e_coeff = energy_coefficient(samples, batch)
+            self.log("val/energy_coeff", e_coeff)
 
-            # Add a scatter plot of losses at each time step:
+            if self.sample_metrics is not None:
+                import timeit
 
-            loss, t = self._shared_step(batch)
-            loss = loss.view(loss.size(0), -1).mean(1)
-
-            fig = self.plot_snrs(t, loss)
-            self.log_image("val_images/losses_by_time", fig)
-
-            if self.noisy_image_plotter is not None:
-                # Plot the noise:
-                noisy_images = []
-                for t in range(
-                    1,
-                    self.diffusion_schedule.n_steps,
-                    self.diffusion_schedule.n_steps // 10,
-                ):
-                    z, *_ = self.add_noise(
-                        batch[:10], t * torch.ones(10, dtype=torch.long)
+                # Time the metric update:
+                for k, metric in self.sample_metrics.items():
+                    start = timeit.default_timer()
+                    metric.update(
+                        self.sample_metric_pre_process_fn(samples), real=False
                     )
-                    noisy_images.append(z)
-                fig = self.noisy_image_plotter(noisy_images)
-                self.log_image(f"val_images/noise_{t}", fig)
+                    metric.update(self.sample_metric_pre_process_fn(batch), real=True)
+                    end = timeit.default_timer()
+                    self.log(f"update_time/{k}", end - start)
 
-        if self.sample_metrics is not None:
-            import timeit
+            if batch_idx == 0 and self.sample_plotter is not None:
+                fig = self.sample_plotter(batch, samples)
+                self.log_image("val_images/samples", fig)
 
-            # Time the metric update:
-            for k, metric in self.sample_metrics.items():
-                start = timeit.default_timer()
-                metric.update(self.sample_metric_pre_process_fn(samples), real=False)
-                metric.update(self.sample_metric_pre_process_fn(batch), real=True)
-                end = timeit.default_timer()
-                self.log(f"update_time/{k}", end - start)
-        return err
+                self.log_histogram("val_images/samples_hist", samples.flatten())
+
+                # Add a scatter plot of losses at each time step:
+
+                loss, t = self._shared_step(batch)
+                loss = loss.view(loss.size(0), -1).mean(1)
+
+                fig = self.plot_snrs(t, loss)
+                self.log_image("val_images/losses_by_time", fig)
+
+                if self.noisy_image_plotter is not None:
+                    # Plot the noise:
+                    noisy_images = []
+                    for t in range(
+                        1,
+                        self.diffusion_schedule.n_steps,
+                        self.diffusion_schedule.n_steps // 10,
+                    ):
+                        z, *_ = self.add_noise(
+                            batch[:10], t * torch.ones(10, dtype=torch.long)
+                        )
+                        noisy_images.append(z)
+                    fig = self.noisy_image_plotter(noisy_images)
+                    self.log_image(f"val_images/noise_{t}", fig)
+        return loss.mean()
 
     def log_image(self, name, fig):
         if hasattr(self.logger, "run"):

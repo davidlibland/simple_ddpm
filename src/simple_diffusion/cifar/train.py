@@ -64,14 +64,18 @@ def log_figure(name, figure, logger):
 
 
 def train(
-    batch_size=2**11,
+    batch_size=128,  # 2**11,
     n_epochs=500,
     n_steps=1000,
     check_val_every_n_epoch=100,
     beta=0.3,
     learning_rate=3e-4,
+    u_steps=3,
+    step_depth=2,
+    initial_hidden=64,
     beta_schedule_form="linear",
     debug=False,
+    cache=True,
 ):
     # Compute the mean and std of the cifar channels:
     mean = 0.5
@@ -93,24 +97,21 @@ def train(
     )
 
     # Create datasets for training & validation, download if necessary
-    train_dataset = CachedDataset(
-        DropLabels(
-            torchvision.datasets.CIFAR10(
-                "./data", train=True, transform=transform, download=True
-            ),
-            data_shrink_factor=1000 if debug else None,
+    train_dataset = DropLabels(
+        torchvision.datasets.CIFAR10(
+            "./data", train=True, transform=transform, download=True
         ),
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        data_shrink_factor=1000 if debug else None,
     )
-    val_dataset = CachedDataset(
-        DropLabels(
-            torchvision.datasets.CIFAR10(
-                "./data", train=False, transform=transform, download=True
-            ),
-            data_shrink_factor=100 if debug else None,
+    val_dataset = DropLabels(
+        torchvision.datasets.CIFAR10(
+            "./data", train=False, transform=transform, download=True
         ),
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        data_shrink_factor=100 if debug else None,
     )
+    if cache and torch.cuda.is_available():
+        train_dataset = CachedDataset(train_dataset, device="cuda")
+        val_dataset = CachedDataset(val_dataset, device="cuda")
     # Check that images are normalized:
     assert train_dataset[0].min() >= -1
     assert train_dataset[0].max() <= 1
@@ -153,10 +154,14 @@ def train(
         sample_metrics=None,  # metrics,
         sample_metric_pre_process_fn=lambda img: img.to("cpu"),
         type="unet",
-        n_steps=3,
+        u_steps=u_steps,
+        step_depth=step_depth,
+        initial_hidden=initial_hidden,
         n_channels=3,
         diffusion_schedule_kwargs=diffusion_schedule_kwargs,
         noisy_image_plotter=noisy_image_plotter,
+        mid_attn=True,
+        attn_resolutions=(1,),
     )
 
     # Setup the logger and the trainer:
@@ -198,4 +203,4 @@ def train(
 
 
 if __name__ == "__main__":
-    train(beta_schedule_form="logit_linear", beta=0.02, debug=False)
+    train(beta_schedule_form="logit_linear", beta=0.02, debug=False, cache=False)
