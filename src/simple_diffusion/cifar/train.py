@@ -7,6 +7,7 @@ import torch
 import torchvision
 import torchvision.transforms.v2 as transforms
 from lightning.pytorch.loggers import TensorBoardLogger
+from lightning.pytorch.tuner import Tuner
 from torch.utils.data import Dataset, DataLoader
 
 from simple_diffusion.cifar.plotting import get_sample_plotter, get_noisy_images_plotter
@@ -55,6 +56,23 @@ class CachedDataset(Dataset):
         return self.cache[idx]
 
 
+class LitDataModule(L.LightningDataModule):
+    def __init__(self, train_dataset, val_dataset, batch_size):
+        super().__init__()
+        self.train_dataset = train_dataset
+        self.val_dataset = val_dataset
+        # or
+        self.batch_size = batch_size
+
+    def train_dataloader(self):
+        return DataLoader(
+            self.train_dataset, batch_size=self.batch_size, shuffle=True, num_workers=4
+        )
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size, num_workers=4)
+
+
 def log_figure(name, figure, logger):
     """Log a figure to the logger."""
     if hasattr(logger, "experiment"):
@@ -67,15 +85,18 @@ def train(
     batch_size=128,  # 2**11,
     n_epochs=500,
     n_steps=1000,
-    check_val_every_n_epoch=100,
+    check_val_every_n_epoch=50,
     beta=0.3,
-    learning_rate=3e-4,
+    learning_rate=3e-5,
     u_steps=3,
     step_depth=2,
-    initial_hidden=64,
+    initial_hidden=128,
+    dropout=0.1,
     beta_schedule_form="linear",
     debug=False,
     cache=True,
+    find_batch_size=False,
+    find_lr=False,
 ):
     # Compute the mean and std of the cifar channels:
     mean = 0.5
@@ -89,6 +110,7 @@ def train(
 
     transform = transforms.Compose(
         [
+            transforms.RandomHorizontalFlip(p=0.5),
             transforms.ToImage(),
             transforms.ToDtype(torch.float32, scale=True),
             transforms.Resize((IMAGE_DIM, IMAGE_DIM)),
@@ -116,8 +138,7 @@ def train(
     assert train_dataset[0].min() >= -1
     assert train_dataset[0].max() <= 1
 
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    datamodule = LitDataModule(train_dataset, val_dataset, batch_size=batch_size)
 
     # Setup the model:
     if beta_schedule_form == "geometric":
@@ -162,6 +183,7 @@ def train(
         noisy_image_plotter=noisy_image_plotter,
         mid_attn=True,
         attn_resolutions=(1,),
+        dropout=dropout,
     )
 
     # Setup the logger and the trainer:
@@ -189,8 +211,29 @@ def train(
         max_epochs=n_epochs,
         logger=logger,
         check_val_every_n_epoch=check_val_every_n_epoch,
+        gradient_clip_val=1.0,
     )
-    trainer.fit(model, train_loader, val_loader)
+    tuner = Tuner(trainer)
+    if find_batch_size:
+        tuner.scale_batch_size(model, mode="binsearch", datamodule=datamodule)
+
+    if find_lr:
+        # Run learning rate finder
+        lr_finder = tuner.lr_find(model, datamodule=datamodule)
+
+        # Results can be found in
+        print(lr_finder.results)
+
+        # Plot with
+        fig = lr_finder.plot(suggest=True)
+        fig.show()
+
+        # Pick point based on plot, or get suggestion
+        new_lr = lr_finder.suggestion()
+
+        # update hparams of the model
+        model.hparams.learning_rate = new_lr
+    trainer.fit(model, datamodule=datamodule)
 
     train_samples = torch.stack(list(itertools.islice(train_dataset, 0, 30)), dim=0)
     true_samples = train_samples.detach().cpu()

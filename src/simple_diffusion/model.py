@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch_ema import ExponentialMovingAverage
 from torchmetrics import Metric
 
 from simple_diffusion.fully_connected_denoiser import Denoiser as FC_Denoiser
@@ -93,6 +94,7 @@ class DiffusionModel(L.LightningModule):
         sample_metric_pre_process_fn: Callable = None,
         diffusion_schedule_kwargs: Dict = {},
         noisy_image_plotter=None,
+        ema_decay=0.9999,
         **denoiser_kwargs,
     ):
         """
@@ -125,6 +127,7 @@ class DiffusionModel(L.LightningModule):
         self.sample_metrics = sample_metrics
         self.sample_metric_pre_process_fn = sample_metric_pre_process_fn
         self.noisy_image_plotter = noisy_image_plotter
+        self.ema = ExponentialMovingAverage(self.denoiser.parameters(), decay=ema_decay)
 
     def log_signal_to_noise(self):
         """Compute the log signal to noise ratio of the denoiser."""
@@ -378,6 +381,12 @@ class DiffusionModel(L.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
         return optimizer
 
+    def on_train_start(self) -> None:
+        self.ema.to(self.device)
+
+    def on_before_zero_grad(self, *args, **kwargs):
+        self.ema.update(self.denoiser.parameters())
+
     def generate(self, n, seed=None):
         """Generate samples from the diffusion model."""
         if seed is not None:
@@ -385,13 +394,20 @@ class DiffusionModel(L.LightningModule):
             gen.manual_seed(seed)
         else:
             gen = None
-        z = torch.randn(n, *self.hparams.latent_shape, generator=gen).to(self.device)
-        for t in range(self.diffusion_schedule.n_steps - 1, 0, -1):
-            t = torch.tensor(t).to(self.device)
-            while len(t.shape) < len(z.shape):
-                t = t.unsqueeze(-1)
-            beta = self.diffusion_schedule(t)["beta"]
-            mean = self.decoder(z, t)
-            eps = torch.randn(*z.shape, generator=gen).to(self.device)
-            z = mean + torch.sqrt(beta) * eps
+        eval_mode = self.training
+        self.eval()
+        self.ema.to(self.device)
+        with self.ema.average_parameters():
+            z = torch.randn(n, *self.hparams.latent_shape, generator=gen).to(
+                self.device
+            )
+            for t in range(self.diffusion_schedule.n_steps - 1, 0, -1):
+                t = torch.tensor(t).to(self.device)
+                while len(t.shape) < len(z.shape):
+                    t = t.unsqueeze(-1)
+                beta = self.diffusion_schedule(t)["beta"]
+                mean = self.decoder(z, t)
+                eps = torch.randn(*z.shape, generator=gen).to(self.device)
+                z = mean + torch.sqrt(beta) * eps
+        self.train(eval_mode)
         return mean
