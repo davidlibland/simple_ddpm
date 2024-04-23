@@ -17,6 +17,8 @@ dependencies = [
 #    "neptune",
     "torchmetrics[image]",
     "tensorboard",
+    "torch-ema",
+    "einops"
 ]
 dynamic = ["version"]
 

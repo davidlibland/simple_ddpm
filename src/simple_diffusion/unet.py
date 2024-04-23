@@ -292,7 +292,6 @@ class UNet(nn.Module):
         u_steps,
         step_depth,
         n_channels,
-        time_scale,
         activation="gelu",
         n_freqs=64,
         initial_hidden=8,
@@ -305,7 +304,7 @@ class UNet(nn.Module):
         channel_list = [initial_hidden * 2**i for i in range(u_steps)]
         self.register_buffer(
             "fourier_freqs",
-            torch.arange(1, n_freqs, 2).float() / (2 * n_freqs) / time_scale,
+            torch.arange(1, n_freqs, 2).float() / (2 * n_freqs),
         )
 
         # Input conv:
@@ -400,6 +399,14 @@ class UNet(nn.Module):
         self.output_conv.bias.data.zero_()
 
     def forward(self, x, t):
+        """
+        Forward pass of the UNet.
+
+        Args:
+            x (torch.Tensor): The input tensor of shape (batch, channels, height, width).
+            t (torch.Tensor): The time tensor of shape (batch, 1). It is assumed that
+                time is scaled to be between 0 and 1.
+        """
         # Embed the time:
         temb = self.encode_time(t.reshape(t.size(0), -1))
         skips = []

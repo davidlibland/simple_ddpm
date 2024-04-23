@@ -5,7 +5,7 @@ import itertools
 import lightning as L
 import torch
 import torchvision
-import torchvision.transforms as transforms
+import torchvision.transforms.v2 as transforms
 from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import Dataset, DataLoader
 
@@ -56,43 +56,42 @@ class CachedDataset(Dataset):
 
 
 def train(
-    batch_size=2**11,
+    batch_size=256,
     n_epochs=500,
-    n_steps=1000,
-    check_val_every_n_epoch=100,
+    n_steps=100,
+    check_val_every_n_epoch=10,
     beta=0.02,
     log_to_neptune=True,
     learning_rate=3e-2,
     beta_schedule_form="geometric",
     debug=False,
+    cache=False,
 ):
     transform = transforms.Compose(
         [
-            transforms.ToTensor(),
+            transforms.ToImage(),
+            transforms.ToDtype(torch.float32, scale=True),
             transforms.Resize((IMAGE_DIM, IMAGE_DIM)),
             transforms.Normalize((0.5,), (0.5,)),
         ]
     )
 
     # Create datasets for training & validation, download if necessary
-    train_dataset = CachedDataset(
-        DropLabels(
-            torchvision.datasets.FashionMNIST(
-                "./data", train=True, transform=transform, download=True
-            ),
-            data_shrink_factor=1000 if debug else None,
+    train_dataset = DropLabels(
+        torchvision.datasets.FashionMNIST(
+            "./data", train=True, transform=transform, download=True
         ),
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        data_shrink_factor=1000 if debug else None,
     )
-    val_dataset = CachedDataset(
-        DropLabels(
-            torchvision.datasets.FashionMNIST(
-                "./data", train=False, transform=transform, download=True
-            ),
-            data_shrink_factor=100 if debug else None,
+    val_dataset = DropLabels(
+        torchvision.datasets.FashionMNIST(
+            "./data", train=False, transform=transform, download=True
         ),
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        data_shrink_factor=100 if debug else None,
     )
+    if cache and torch.cuda.is_available():
+        train_dataset = CachedDataset(train_dataset, device="cuda")
+        val_dataset = CachedDataset(val_dataset, device="cuda")
 
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
@@ -117,7 +116,6 @@ def train(
             "schedule_type": beta_schedule_form,
             "log_snr_min": log_snr_min,
             "log_snr_max": log_snr_max,
-            "n_steps": n_steps,
         }
     metrics = {
         # "fid": FrechetInceptionDistance(normalize=True, feature=64),
@@ -134,10 +132,11 @@ def train(
             "cpu"
         ),
         type="unet",
-        u_steps=3,
+        u_steps=2,
         step_depth=1,
         n_channels=1,
         diffusion_schedule_kwargs=diffusion_schedule_kwargs,
+        n_time_steps=n_steps,
     )
 
     # Setup the logger and the trainer:
@@ -165,6 +164,7 @@ def train(
         max_epochs=n_epochs,
         logger=logger,
         check_val_every_n_epoch=check_val_every_n_epoch,
+        num_sanity_val_steps=0,
     )
     trainer.fit(model, train_loader, val_loader)
 
@@ -182,4 +182,4 @@ def train(
 
 
 if __name__ == "__main__":
-    train(beta_schedule_form="linear", beta=0.02)
+    train(beta_schedule_form="logit_linear", beta=0.02, debug=False)

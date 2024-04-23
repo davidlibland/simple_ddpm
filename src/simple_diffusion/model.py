@@ -15,6 +15,46 @@ from simple_diffusion.metrics import energy_coefficient
 from simple_diffusion.unet import UNet
 
 
+class AbsDiffusionSchedule(nn.Module):
+    """An abstract diffusion schedule."""
+
+    def log_snr(self, t):
+        """Returns the log signal to noise ratio."""
+        raise NotImplementedError
+
+    def dlog_snr(self, t):
+        """Returns the slope of the log signal to noise ratio."""
+        raise NotImplementedError
+
+    def normalized_log_snr(self, t):
+        """Returns the normalized log signal to noise ratio."""
+        log_snr = self.log_snr(t)
+        return (log_snr - self.log_snr_min) / (self.log_snr_max - self.log_snr_min)
+
+    def forward(self, t, s=None):
+        """Returns the signal at time t"""
+        gamma_t = self.log_snr(t)
+        sigma_2_t = torch.sigmoid(gamma_t)
+        alpha_2_t = torch.sigmoid(-gamma_t)
+        alpha_t = torch.sqrt(alpha_2_t)
+        sigma_t = torch.sqrt(sigma_2_t)
+        result = {
+            "alpha_t": alpha_t,
+            "sigma_t": sigma_t,
+        }
+        if s is not None:
+            gamma_s = self.log_snr(s)
+            alpha_2_s = torch.sigmoid(-gamma_s)
+            alpha_s_t = torch.sqrt(alpha_2_s / alpha_2_t)
+            sigma_2_s = torch.sigmoid(gamma_s)
+            sigma_s = torch.sqrt(sigma_2_s)
+            expm1_delta = -torch.expm1(gamma_s - gamma_t)
+            result["alpha_s_t"] = alpha_s_t
+            result["sigma_s"] = sigma_s
+            result["expm1_delta"] = expm1_delta
+        return result
+
+
 class LinearDiffusionSchedule(nn.Module):
     def __init__(self, beta_min=1e-2, beta_max=0.99, n_steps=100):
         super().__init__()
@@ -54,34 +94,33 @@ class LinearDiffusionSchedule(nn.Module):
         }
 
 
-class LogitLinearSNR(nn.Module):
-    def __init__(self, log_snr_min=-6, log_snr_max=6, n_steps=100):
+class LogitLinearSNR(AbsDiffusionSchedule):
+    def __init__(self, log_snr_min=-6, log_snr_max=6):
         super().__init__()
+        self.log_snr_min = log_snr_min
+        self.log_snr_max = log_snr_max
 
-        log_snr = torch.linspace(log_snr_max, log_snr_min, n_steps, dtype=torch.float)
-        self.register_buffer("log_snr", log_snr)
-
-    @property
-    def n_steps(self):
-        return len(self.log_snr)
-
-    def log_signal_to_noise(self):
+    def log_snr(self, t):
         """Returns the log signal to noise ratio."""
-        return self.log_snr
+        return t * (self.log_snr_max - self.log_snr_min) + self.log_snr_min
 
-    def forward(self, t):
-        """Returns the signal at time t"""
-        scale_t_2 = torch.sigmoid(self.log_snr[t])
-        var_t = torch.sigmoid(-self.log_snr[t])
-        beta_t = -torch.expm1(self.log_snr[t] - self.log_snr[t - 1]) * torch.sigmoid(
-            -self.log_snr[t]
-        )
-        return {
-            "alpha": scale_t_2,
-            "beta": beta_t,
-            "1-alpha": var_t,
-            "1-beta": 1 - beta_t,
-        }
+    def dlog_snr(self, t):
+        """Returns the log signal to noise ratio."""
+        return (self.log_snr_max - self.log_snr_min) * torch.ones_like(t)
+
+    # def forward(self, t):
+    #     """Returns the signal at time t"""
+    #     scale_t_2 = torch.sigmoid(self.log_snr[t])
+    #     var_t = torch.sigmoid(-self.log_snr[t])
+    #     beta_t = -torch.expm1(self.log_snr[t] - self.log_snr[t - 1]) * torch.sigmoid(
+    #         -self.log_snr[t]
+    #     )
+    #     return {
+    #         "alpha": scale_t_2,
+    #         "beta": beta_t,
+    #         "1-alpha": var_t,
+    #         "1-beta": 1 - beta_t,
+    #     }
 
 
 class DiffusionModel(L.LightningModule):
@@ -95,6 +134,7 @@ class DiffusionModel(L.LightningModule):
         diffusion_schedule_kwargs: Dict = {},
         noisy_image_plotter=None,
         ema_decay=0.9999,
+        n_time_steps=100,
         **denoiser_kwargs,
     ):
         """
@@ -119,7 +159,7 @@ class DiffusionModel(L.LightningModule):
                 "noisy_image_plotter",
             ]
         )
-        self.diffusion_schedule = self._build_diffusion_schedule(
+        self.diffusion_schedule: AbsDiffusionSchedule = self._build_diffusion_schedule(
             **diffusion_schedule_kwargs
         )
         self.denoiser = self._build_denoiser(**denoiser_kwargs)
@@ -131,17 +171,17 @@ class DiffusionModel(L.LightningModule):
 
     def log_signal_to_noise(self):
         """Compute the log signal to noise ratio of the denoiser."""
-        t = torch.arange(0, self.diffusion_schedule.n_steps)
-        return t, self.diffusion_schedule.log_signal_to_noise()
+        t = torch.linspace(0, 1, self.hparams.n_time_steps)
+        return t, self.diffusion_schedule.log_snr(t)
 
     def generative_variance_at_zero_mean(self):
         """Compute the variance at time 0."""
         var = 1
-        for t in range(self.diffusion_schedule.n_steps - 1, 0, -1):
-            t = torch.tensor(t).to(self.device)
-            beta = self.diffusion_schedule(t)["beta"].detach().cpu().numpy()
-            one_m_beta = self.diffusion_schedule(t)["1-beta"].detach().cpu().numpy()
-            var = var / one_m_beta + beta
+        # Fixme
+        # for t in torch.linspace(1, 0, self.hparams.n_time_steps).to(self.device):
+        #     beta = self.diffusion_schedule(t)["beta"].detach().cpu().numpy()
+        #     one_m_beta = self.diffusion_schedule(t)["1-beta"].detach().cpu().numpy()
+        #     var = var / one_m_beta + beta
         return var
 
     def _build_denoiser(self, **denoiser_kwargs):
@@ -156,11 +196,13 @@ class DiffusionModel(L.LightningModule):
             )
         elif denoiser_type == "unet":
             return UNet(
-                time_scale=self.diffusion_schedule.n_steps - 1,
+                time_scale=1,
                 **denoiser_kwargs,
             )
 
-    def _build_diffusion_schedule(self, schedule_type="linear", **kwargs):
+    def _build_diffusion_schedule(
+        self, schedule_type="linear", **kwargs
+    ) -> AbsDiffusionSchedule:
         """Build the denoiser network."""
         if schedule_type == "linear":
             return LinearDiffusionSchedule(**kwargs)
@@ -169,13 +211,18 @@ class DiffusionModel(L.LightningModule):
         else:
             raise NotImplementedError(f"Schedule type {schedule_type} not implemented.")
 
-    def decoder(self, z, t):
+    def decoder(self, z, t, s):
         """The decoder network, defined in terms of the denoiser."""
-        schedule = self.diffusion_schedule(t)
-        beta = schedule["beta"]
+        schedule = self.diffusion_schedule(t, s)
+        sigma_t = schedule["sigma_t"]
+        alpha_s_t = schedule["alpha_s_t"]
+        expm1_delta = schedule["expm1_delta"]
         noise_est = self.denoiser(z, t.expand(z.shape[0], *t.shape[1:]))
-        factor = beta / torch.sqrt(schedule["1-alpha"])
-        return (z - factor * noise_est) / torch.sqrt(schedule["1-beta"])
+
+        mean = alpha_s_t * (z - sigma_t * expm1_delta * noise_est)
+        return mean
+        # factor = beta / torch.sqrt(schedule["1-alpha"])
+        # return (z - factor * noise_est) / torch.sqrt(schedule["1-beta"])
 
     def training_step(self, batch):
         """The training step for the diffusion model."""
@@ -201,11 +248,19 @@ class DiffusionModel(L.LightningModule):
     def _shared_step(self, batch):
         """The shared step for the training and validation steps."""
         x = batch
-        n = x.shape[0]
-        t = torch.randint(1, self.diffusion_schedule.n_steps, (n,)).to(x.device)
+        n = x.size(0)
+        u = torch.rand(1).to(x.device)
+        i = torch.arange(n, device=x.device) / n
+        t = (i + u) % 1
         z, t, eps = self.add_noise(x, t)
-        eps_tilde = self.denoiser(z, t)
+        gamma_t_norm = self.diffusion_schedule.normalized_log_snr(t)
+        gamma_t_prime = self.diffusion_schedule.dlog_snr(t)
+        eps_tilde = self.denoiser(z, gamma_t_norm)
         loss = F.mse_loss(eps_tilde, eps, reduction="none")
+        # Rescale the loss by the derivative of the log snr:
+        while len(gamma_t_prime.shape) < len(loss.shape):
+            gamma_t_prime = gamma_t_prime.unsqueeze(-1)
+        loss = gamma_t_prime * loss
         return loss, t
 
     def add_noise(self, x, t):
@@ -214,11 +269,12 @@ class DiffusionModel(L.LightningModule):
         assert (t != 0).all()
         eps = torch.randn_like(x)
         schedule = self.diffusion_schedule(t)
-        z = torch.sqrt(schedule["alpha"]) * x + torch.sqrt(schedule["1-alpha"]) * eps
+        z = schedule["alpha_t"] * x + schedule["sigma_t"] * eps
         return z, t, eps
 
     def plot_snrs(self, loss_locs, loss_vals) -> plt.Figure:
-        t, log_snr = self.log_signal_to_noise()
+        t, neg_log_snr = self.log_signal_to_noise()
+        log_snr = -neg_log_snr
         t = t.detach().cpu().numpy()
         signal = torch.sqrt(torch.sigmoid(log_snr))
         noise = torch.sqrt(torch.sigmoid(-log_snr))
@@ -275,6 +331,7 @@ class DiffusionModel(L.LightningModule):
         """The validation step for the diffusion model."""
 
         loss, t = self._shared_step(batch)
+        self.log("val/loss", loss.mean(), prog_bar=True)
         generate_samples = any(
             [
                 self.sample_metrics is not None,
@@ -310,8 +367,6 @@ class DiffusionModel(L.LightningModule):
                 self.log_histogram("val_images/samples_hist", samples.flatten())
 
                 # Add a scatter plot of losses at each time step:
-
-                loss, t = self._shared_step(batch)
                 loss = loss.view(loss.size(0), -1).mean(1)
 
                 fig = self.plot_snrs(t, loss)
@@ -401,13 +456,16 @@ class DiffusionModel(L.LightningModule):
             z = torch.randn(n, *self.hparams.latent_shape, generator=gen).to(
                 self.device
             )
-            for t in range(self.diffusion_schedule.n_steps - 1, 0, -1):
-                t = torch.tensor(t).to(self.device)
+            ts = torch.linspace(1, 0, self.hparams.n_time_steps, device=self.device)
+            for t, s in zip(ts, ts[1:]):
                 while len(t.shape) < len(z.shape):
                     t = t.unsqueeze(-1)
-                beta = self.diffusion_schedule(t)["beta"]
-                mean = self.decoder(z, t)
+                    s = s.unsqueeze(-1)
+                schedule = self.diffusion_schedule(t, s)
+                sigma_s = schedule["sigma_s"]
+                expm1_delta = schedule["expm1_delta"]
+                mean = self.decoder(z, t, s)
                 eps = torch.randn(*z.shape, generator=gen).to(self.device)
-                z = mean + torch.sqrt(beta) * eps
+                z = mean + sigma_s * torch.sqrt(expm1_delta) * eps
         self.train(eval_mode)
         return mean
