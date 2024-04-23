@@ -50,19 +50,20 @@ class ResNetBlock(nn.Module):
         activation="gelu",
         time_norm=False,
         dropout=0.1,
+        n_groups=N_GROUPS,
     ):
         super().__init__()
         self.time_norm = time_norm
         if self.time_norm:
             self.norm1 = Normalization(
-                num_groups=N_GROUPS,
+                num_groups=n_groups,
                 num_channels=n_channels,
                 time_embed_dim=time_embed_dim,
                 activation=activation,
             )
         else:
             self.norm1 = nn.GroupNorm(
-                num_groups=N_GROUPS,
+                num_groups=n_groups,
                 num_channels=n_channels,
             )
         self.activation1 = _get_activation(activation)
@@ -78,7 +79,7 @@ class ResNetBlock(nn.Module):
                 activation=activation,
             )
         else:
-            self.norm2 = nn.GroupNorm(num_groups=N_GROUPS, num_channels=2 * n_channels)
+            self.norm2 = nn.GroupNorm(num_groups=n_groups, num_channels=2 * n_channels)
         self.activation2 = _get_activation(activation)
         self.dropout = nn.Dropout2d(dropout)
         self.conv2 = nn.Conv2d(2 * n_channels, n_channels, kernel_size=3, padding=1)
@@ -113,13 +114,13 @@ class ResNetBlock(nn.Module):
 
 
 class ChannelAttention(nn.Module):
-    def __init__(self, in_channels, n_heads=8, n_freqs=32):
+    def __init__(self, in_channels, n_heads=8, n_freqs=32, n_groups=N_GROUPS):
         super().__init__()
         if in_channels % n_heads != 0:
             raise ValueError(
                 f"Number of heads {n_heads} must divide number of channels {in_channels}"
             )
-        self.norm = nn.GroupNorm(num_groups=N_GROUPS, num_channels=in_channels)
+        self.norm = nn.GroupNorm(num_groups=n_groups, num_channels=in_channels)
         self.conv = nn.Conv2d(in_channels + 2 * n_freqs, in_channels * 3, kernel_size=1)
         self.scale = in_channels**-0.5
         self.n_heads = n_heads
@@ -180,6 +181,8 @@ class Up(nn.Module):
         depth=1,
         attn=False,
         dropout=0.1,
+        n_groups=N_GROUPS,
+        n_heads=8,
     ):
         super().__init__()
 
@@ -190,6 +193,7 @@ class Up(nn.Module):
                     time_embed_dim=time_embed_dim,
                     activation=activation,
                     dropout=dropout,
+                    n_groups=n_groups,
                 )
                 for _ in range(depth)
             ]
@@ -197,7 +201,9 @@ class Up(nn.Module):
         self.attns = nn.ModuleList(
             [
                 (
-                    ChannelAttention(in_channels, n_heads=8, n_freqs=32)
+                    ChannelAttention(
+                        in_channels, n_heads=n_heads, n_freqs=32, n_groups=n_groups
+                    )
                     if attn
                     else nn.Identity()
                 )
@@ -241,6 +247,8 @@ class Down(nn.Module):
         depth=1,
         attn=False,
         dropout=0.1,
+        n_groups=N_GROUPS,
+        n_heads=8,
     ):
         super().__init__()
 
@@ -251,6 +259,7 @@ class Down(nn.Module):
                     time_embed_dim=time_embed_dim,
                     activation=activation,
                     dropout=dropout,
+                    n_groups=n_groups,
                 )
                 for _ in range(depth)
             ]
@@ -258,7 +267,9 @@ class Down(nn.Module):
         self.attns = nn.ModuleList(
             [
                 (
-                    ChannelAttention(in_channels, n_heads=8, n_freqs=32)
+                    ChannelAttention(
+                        in_channels, n_heads=n_heads, n_freqs=32, n_groups=n_groups
+                    )
                     if attn
                     else nn.Identity()
                 )
@@ -298,6 +309,8 @@ class UNet(nn.Module):
         mid_attn=True,
         attn_resolutions=(1,),
         dropout=0.1,
+        n_groups=N_GROUPS,
+        n_heads=8,
     ):
         super().__init__()
         self.attn = mid_attn
@@ -329,6 +342,8 @@ class UNet(nn.Module):
                     depth=step_depth,
                     attn=i in attn_resolutions,
                     dropout=dropout,
+                    n_groups=n_groups,
+                    n_heads=n_heads,
                 )
                 for i, (in_channels, out_channels) in enumerate(
                     zip(channel_list[:-1], channel_list[1:])
@@ -345,6 +360,7 @@ class UNet(nn.Module):
                     time_embed_dim=n_freqs,
                     activation=activation,
                     dropout=dropout,
+                    n_groups=n_groups,
                 )
                 for _ in range(step_depth - 1)
             ]
@@ -356,12 +372,15 @@ class UNet(nn.Module):
                     time_embed_dim=n_freqs,
                     activation=activation,
                     dropout=dropout,
+                    n_groups=n_groups,
                 )
                 for _ in range(step_depth - 1)
             ]
         )
         if self.attn:
-            self.middle = ChannelAttention(channel_list[-1], n_heads=8)
+            self.middle = ChannelAttention(
+                channel_list[-1], n_heads=n_heads, n_groups=n_groups
+            )
         else:
             self.middle = nn.Identity()
 
@@ -376,6 +395,8 @@ class UNet(nn.Module):
                     depth=step_depth,
                     attn=i in attn_resolutions,
                     dropout=dropout,
+                    n_groups=n_groups,
+                    n_heads=n_heads,
                 )
                 for i, (in_channels, out_channels) in reversed(
                     list(enumerate(zip(channel_list[1:], channel_list[:-1])))
@@ -385,7 +406,7 @@ class UNet(nn.Module):
 
         # Output conv:
         self.out_norm = Normalization(
-            num_groups=N_GROUPS,
+            num_groups=n_groups,
             num_channels=initial_hidden,
             time_embed_dim=n_freqs,
             activation=activation,

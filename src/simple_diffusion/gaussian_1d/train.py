@@ -2,7 +2,7 @@
 
 import lightning as L
 import torch
-from lightning.pytorch.loggers import NeptuneLogger
+from lightning.pytorch.loggers import NeptuneLogger, TensorBoardLogger
 from torch.utils.data import Dataset, DataLoader
 
 from simple_diffusion.gaussian_1d.plotting import sample_plotter
@@ -37,6 +37,14 @@ class GaussianMixture(Dataset):
         return self.samples[idx]
 
 
+def log_figure(name, figure, logger):
+    """Log a figure to the logger."""
+    if hasattr(logger, "experiment"):
+        logger.experiment.add_figure(name, figure)
+    elif hasattr(logger, "run"):
+        logger.run[name].upload(figure)
+
+
 def train(
     means=(-1, 1),
     stds=(0.1, 0.1),
@@ -58,22 +66,20 @@ def train(
         sample_plotter=sample_plotter,
         diffusion_schedule_kwargs={
             "schedule_type": "linear",
-            "beta_min": 1e-4,
-            "beta_max": beta,
-            "n_steps": n_steps,
         },
     )
 
     # Setup the logger and the trainer:
-    neptune_logger = NeptuneLogger(
-        # api_key=NEPTUNE_API_TOKEN,  # replace with your own
-        project=NEPTUNE_PROJECT,  # format "workspace-name/project-name"
-        tags=["training", "diffusion", "gaussian_mixture"],  # optional
-        mode="async" if log_to_neptune else "debug",
-    )
+    # neptune_logger = NeptuneLogger(
+    #     # api_key=NEPTUNE_API_TOKEN,  # replace with your own
+    #     project=NEPTUNE_PROJECT,  # format "workspace-name/project-name"
+    #     tags=["training", "diffusion", "gaussian_mixture"],  # optional
+    #     mode="async" if log_to_neptune else "debug",
+    # )
+    logger = TensorBoardLogger("tb_logs", name="simplediffusion")
     trainer = L.Trainer(
         max_epochs=n_epochs,
-        logger=neptune_logger,
+        logger=logger,
         check_val_every_n_epoch=100,
     )
     trainer.fit(model, train_loader, val_loader)
@@ -84,7 +90,7 @@ def train(
         fake=trainer.model.generate(len(true_samples), seed=SEED).detach().cpu(),
     )
 
-    neptune_logger.run["samples"].upload(fig)
+    log_figure("samples", fig, logger)
 
 
 if __name__ == "__main__":

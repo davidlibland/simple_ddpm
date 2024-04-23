@@ -2,7 +2,7 @@
 
 import lightning as L
 import torch
-from lightning.pytorch.loggers import NeptuneLogger
+from lightning.pytorch.loggers import NeptuneLogger, TensorBoardLogger
 from torch.utils.data import Dataset, DataLoader
 
 from simple_diffusion.gaussian_2d.plotting import sample_plotter
@@ -38,6 +38,14 @@ class GaussianMixture2d(Dataset):
         return self.samples[idx]
 
 
+def log_figure(name, figure, logger):
+    """Log a figure to the logger."""
+    if hasattr(logger, "experiment"):
+        logger.experiment.add_figure(name, figure)
+    elif hasattr(logger, "run"):
+        logger.run[name].upload(figure)
+
+
 def train(
     means=((-1, 1), (1, -1), (1, 1)),
     stds=(0.03, 0.03, 0.03),
@@ -45,7 +53,6 @@ def train(
     batch_size=1000,
     n_epochs=10000,
     n_steps=100,
-    beta=0.3,
     log_to_neptune=True,
     learning_rate=3e-2,
 ):
@@ -61,32 +68,32 @@ def train(
         sample_plotter=sample_plotter,
         diffusion_schedule_kwargs={
             "schedule_type": "linear",
-            "beta_min": 1e-4,
-            "beta_max": beta,
-            "n_steps": n_steps,
         },
     )
 
     # Setup the logger and the trainer:
-    neptune_logger = NeptuneLogger(
-        # api_key=NEPTUNE_API_TOKEN,  # replace with your own
-        project=NEPTUNE_PROJECT,  # format "workspace-name/project-name"
-        tags=["training", "diffusion", "gaussian_mixture"],  # optional
-        mode="async" if log_to_neptune else "debug",
+    # neptune_logger = NeptuneLogger(
+    #     # api_key=NEPTUNE_API_TOKEN,  # replace with your own
+    #     project=NEPTUNE_PROJECT,  # format "workspace-name/project-name"
+    #     tags=["training", "diffusion", "gaussian_mixture"],  # optional
+    #     mode="async" if log_to_neptune else "debug",
+    # )
+    logger = TensorBoardLogger("tb_logs", name="simplediffusion")
+
+    logger.log_hyperparams(
+        {
+            "means": means,
+            "stds": stds,
+            "n_samples": n_samples,
+            "batch_size": batch_size,
+            "n_epochs": n_epochs,
+            "n_steps": n_steps,
+            "learning_rate": learning_rate,
+        }
     )
-    neptune_logger.run["training_params"] = {
-        "means": means,
-        "stds": stds,
-        "n_samples": n_samples,
-        "batch_size": batch_size,
-        "n_epochs": n_epochs,
-        "n_steps": n_steps,
-        "beta": beta,
-        "learning_rate": learning_rate,
-    }
     trainer = L.Trainer(
         max_epochs=n_epochs,
-        logger=neptune_logger,
+        logger=logger,
         check_val_every_n_epoch=100,
     )
     trainer.fit(model, train_loader, val_loader)
@@ -96,7 +103,7 @@ def train(
         fake=trainer.model.generate(len(train_dataset), seed=SEED).detach().cpu(),
     )
 
-    neptune_logger.run["samples"].upload(fig)
+    log_figure("samples", fig, logger)
 
 
 if __name__ == "__main__":

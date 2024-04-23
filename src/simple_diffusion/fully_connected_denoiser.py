@@ -5,7 +5,7 @@ from torch import nn as nn
 class Denoiser(nn.Module):
     """A simple fully connected denoiser network."""
 
-    def __init__(self, latent_shape, time_scale, n_freqs=32, n_hidden=64):
+    def __init__(self, latent_shape, n_freqs=32, n_hidden=64):
         super().__init__()
         n_dims = torch.prod(torch.tensor(latent_shape)).item()
         self.net = nn.Sequential(
@@ -16,7 +16,7 @@ class Denoiser(nn.Module):
         )
         self.register_buffer(
             "fourier_freqs",
-            torch.arange(1, n_freqs, 2).float() / (2 * n_freqs) / time_scale,
+            torch.arange(1, n_freqs, 2).float() / (2 * n_freqs),
         )
         self.net[-1].weight.data.zero_()
         self.net[-1].bias.data.zero_()

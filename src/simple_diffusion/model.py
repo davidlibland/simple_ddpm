@@ -1,5 +1,6 @@
 """A simple diffusion model"""
 
+import math
 from typing import Dict, Callable, Tuple
 
 import lightning as L
@@ -44,8 +45,9 @@ class AbsDiffusionSchedule(nn.Module):
         }
         if s is not None:
             gamma_s = self.log_snr(s)
-            alpha_2_s = torch.sigmoid(-gamma_s)
-            alpha_s_t = torch.sqrt(alpha_2_s / alpha_2_t)
+            log_alpha_t = -F.softplus(gamma_t) / 2
+            log_alpha_s = -F.softplus(gamma_s) / 2
+            alpha_s_t = torch.exp(log_alpha_s - log_alpha_t)
             sigma_2_s = torch.sigmoid(gamma_s)
             sigma_s = torch.sqrt(sigma_2_s)
             expm1_delta = -torch.expm1(gamma_s - gamma_t)
@@ -55,43 +57,34 @@ class AbsDiffusionSchedule(nn.Module):
         return result
 
 
-class LinearDiffusionSchedule(nn.Module):
-    def __init__(self, beta_min=1e-2, beta_max=0.99, n_steps=100):
+class LinearDiffusionSchedule(AbsDiffusionSchedule):
+    def __init__(self):
         super().__init__()
+        # beta_schedule = torch.linspace(beta_min, beta_max, n_steps, dtype=torch.float)
+        # alpha_schedule = torch.cumprod(1 - beta_schedule, dim=0)  # (T,)
+        # self.register_buffer("alpha_schedule", alpha_schedule)
+        # self.register_buffer("beta_schedule", beta_schedule)
+        # signal = torch.sqrt(self.alpha_schedule)
+        # noise = 1 - self.alpha_schedule
+        # log_snr = torch.log(torch.square(signal) / noise)
+        # self.register_buffer("log_snr", log_snr)
 
-        beta_schedule = torch.linspace(beta_min, beta_max, n_steps, dtype=torch.float)
-        alpha_schedule = torch.cumprod(1 - beta_schedule, dim=0)  # (T,)
-        self.register_buffer("alpha_schedule", alpha_schedule)
-        self.register_buffer("beta_schedule", beta_schedule)
-        signal = torch.sqrt(self.alpha_schedule)
-        noise = 1 - self.alpha_schedule
-        log_snr = torch.log(torch.square(signal) / noise)
-        self.register_buffer("log_snr", log_snr)
-
-    @property
-    def n_steps(self):
-        return len(self.alpha_schedule)
-
-    def log_signal_to_noise(self):
+    def log_snr(self, t):
         """Returns the log signal to noise ratio."""
-        return self.log_snr
+        log_snr = torch.log(torch.expm1(1e-4 + 10 * t**2))
+        return log_snr
 
-    def forward(self, t):
-        """Returns the signal at time t"""
-        scale_t_2 = torch.sigmoid(self.log_snr[t])
-        var_t = 1 - scale_t_2
-        scale_t = torch.sqrt(scale_t_2)
-        scale_s_2 = torch.sigmoid(self.log_snr[t - 1])
-        var_s = 1 - scale_s_2
-        scale_s = torch.sqrt(scale_s_2)
-        beta_t = 1 - scale_t_2 / scale_s_2
-        scale_t_s = scale_t / scale_s
-        return {
-            "alpha": scale_t_2,
-            "beta": beta_t,
-            "1-alpha": var_t,
-            "1-beta": scale_t_2 / scale_s_2,
-        }
+    def normalized_log_snr(self, t):
+        """Returns the log signal to noise ratio."""
+        log_snr_min = math.log(math.expm1(1e-4))
+        log_snr_max = math.log(math.expm1(1e-4 + 10))
+        log_snr = self.log_snr(t)
+        return (log_snr - log_snr_min) / (log_snr_max - log_snr_min)
+
+    def dlog_snr(self, t):
+        """Returns the derivative of the log signal to noise ratio."""
+        dlog_snr = 2 * 10 * torch.exp(1e-4 + 10 * t**2) / torch.expm1(1e-4 + 10 * t**2)
+        return dlog_snr
 
 
 class LogitLinearSNR(AbsDiffusionSchedule):
@@ -107,20 +100,6 @@ class LogitLinearSNR(AbsDiffusionSchedule):
     def dlog_snr(self, t):
         """Returns the log signal to noise ratio."""
         return (self.log_snr_max - self.log_snr_min) * torch.ones_like(t)
-
-    # def forward(self, t):
-    #     """Returns the signal at time t"""
-    #     scale_t_2 = torch.sigmoid(self.log_snr[t])
-    #     var_t = torch.sigmoid(-self.log_snr[t])
-    #     beta_t = -torch.expm1(self.log_snr[t] - self.log_snr[t - 1]) * torch.sigmoid(
-    #         -self.log_snr[t]
-    #     )
-    #     return {
-    #         "alpha": scale_t_2,
-    #         "beta": beta_t,
-    #         "1-alpha": var_t,
-    #         "1-beta": 1 - beta_t,
-    #     }
 
 
 class DiffusionModel(L.LightningModule):
@@ -190,13 +169,11 @@ class DiffusionModel(L.LightningModule):
         denoiser_type = denoiser_kwargs.pop("type", "fully_connected")
         if denoiser_type == "fully_connected":
             return FC_Denoiser(
-                time_scale=self.diffusion_schedule.n_steps - 1,
                 latent_shape=self.hparams.latent_shape,
                 **denoiser_kwargs,
             )
         elif denoiser_type == "unet":
             return UNet(
-                time_scale=1,
                 **denoiser_kwargs,
             )
 
@@ -375,14 +352,11 @@ class DiffusionModel(L.LightningModule):
                 if self.noisy_image_plotter is not None:
                     # Plot the noise:
                     noisy_images = []
-                    for t in range(
-                        1,
-                        self.diffusion_schedule.n_steps,
-                        self.diffusion_schedule.n_steps // 10,
-                    ):
-                        z, *_ = self.add_noise(
-                            batch[:10], t * torch.ones(10, dtype=torch.long)
-                        )
+                    for t in torch.linspace(0, 1, 10, device=self.device):
+                        if t == 0:
+                            z = batch[:10]
+                        else:
+                            z, *_ = self.add_noise(batch[:10], t.expand(10))
                         noisy_images.append(z)
                     fig = self.noisy_image_plotter(noisy_images)
                     self.log_image(f"val_images/noise_{t}", fig)

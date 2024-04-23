@@ -60,7 +60,6 @@ def train(
     n_epochs=500,
     n_steps=100,
     check_val_every_n_epoch=10,
-    beta=0.02,
     log_to_neptune=True,
     learning_rate=3e-2,
     beta_schedule_form="geometric",
@@ -101,13 +100,8 @@ def train(
         raise NotImplementedError("Geometric schedule not implemented")
         beta_schedule = beta * ((1 - beta) ** (n_steps - torch.arange(n_steps)))
     elif beta_schedule_form == "linear":
-        beta_start = 1e-4
-        beta_end = beta
         diffusion_schedule_kwargs = {
             "schedule_type": beta_schedule_form,
-            "beta_min": beta_start,
-            "beta_max": beta_end,
-            "n_steps": n_steps,
         }
     elif beta_schedule_form == "logit_linear":
         log_snr_min = -6
@@ -152,7 +146,6 @@ def train(
             "batch_size": batch_size,
             "n_epochs": n_epochs,
             "n_steps": n_steps,
-            "beta": beta,
             "learning_rate": learning_rate,
             "check_val_every_n_epoch": check_val_every_n_epoch,
             "image_dim": IMAGE_DIM,

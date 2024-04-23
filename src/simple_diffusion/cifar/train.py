@@ -86,7 +86,6 @@ def train(
     n_epochs=500,
     n_steps=1000,
     check_val_every_n_epoch=50,
-    beta=0.3,
     learning_rate=3e-5,
     u_steps=3,
     step_depth=2,
@@ -97,6 +96,8 @@ def train(
     cache=True,
     find_batch_size=False,
     find_lr=False,
+    n_groups=8,
+    n_heads=8,
 ):
     # Compute the mean and std of the cifar channels:
     mean = 0.5
@@ -145,13 +146,8 @@ def train(
         raise NotImplementedError("Geometric schedule not implemented")
         beta_schedule = beta * ((1 - beta) ** (n_steps - torch.arange(n_steps)))
     elif beta_schedule_form == "linear":
-        beta_start = 1e-4
-        beta_end = beta
         diffusion_schedule_kwargs = {
             "schedule_type": beta_schedule_form,
-            "beta_min": beta_start,
-            "beta_max": beta_end,
-            "n_steps": n_steps,
         }
     elif beta_schedule_form == "logit_linear":
         log_snr_min = -6
@@ -184,6 +180,8 @@ def train(
         mid_attn=True,
         attn_resolutions=(1,),
         dropout=dropout,
+        n_groups=n_groups,
+        n_heads=n_heads,
     )
 
     # Setup the logger and the trainer:
@@ -235,7 +233,7 @@ def train(
         model.hparams.learning_rate = new_lr
     trainer.fit(model, datamodule=datamodule)
 
-    train_samples = torch.stack(list(itertools.islice(train_dataset, 0, 30)), dim=0)
+    train_samples = torch.stack(list(itertools.islice(train_dataset, 0, 60)), dim=0)
     true_samples = train_samples.detach().cpu()
     fake_samples = trainer.model.generate(len(true_samples), seed=SEED).detach().cpu()
     fig = sample_plotter(
