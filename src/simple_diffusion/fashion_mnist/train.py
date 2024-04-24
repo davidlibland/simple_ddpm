@@ -175,4 +175,4 @@ def train(
 
 
 if __name__ == "__main__":
-    train(beta_schedule_form="logit_linear", beta=0.02, debug=False)
+    train(beta_schedule_form="logit_linear", debug=False)
