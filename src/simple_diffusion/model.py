@@ -133,7 +133,7 @@ class DiffusionModel(L.LightningModule):
         self.save_hyperparameters(
             ignore=[
                 "sample_plotter",
-                "metrics",
+                "sample_metrics",
                 "sample_metric_pre_process_fn",
                 "noisy_image_plotter",
             ]

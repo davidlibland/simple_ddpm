@@ -140,7 +140,7 @@ def train(
     #     tags=["training", "diffusion", "gaussian_mixture"],  # optional
     #     mode="async" if log_to_neptune else "debug",
     # )
-    logger = TensorBoardLogger("tb_logs", name="simplediffusion")
+    logger = TensorBoardLogger("tb_logs_orig", name="simplediffusion")
     logger.log_hyperparams(
         {
             "batch_size": batch_size,
