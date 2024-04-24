@@ -156,7 +156,6 @@ def train(
             "schedule_type": beta_schedule_form,
             "log_snr_min": log_snr_min,
             "log_snr_max": log_snr_max,
-            "n_steps": n_steps,
         }
     metrics = {
         # "fid": FrechetInceptionDistance(normalize=True, feature=64),
@@ -182,6 +181,7 @@ def train(
         dropout=dropout,
         n_groups=n_groups,
         n_heads=n_heads,
+        n_time_steps=n_steps,
     )
 
     # Setup the logger and the trainer:
@@ -244,4 +244,4 @@ def train(
 
 
 if __name__ == "__main__":
-    train(beta_schedule_form="logit_linear", beta=0.02, debug=False, cache=False)
+    train(beta_schedule_form="logit_linear", debug=False, cache=False)

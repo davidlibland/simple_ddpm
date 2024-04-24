@@ -143,7 +143,9 @@ class DiffusionModel(L.LightningModule):
         )
         self.denoiser = self._build_denoiser(**denoiser_kwargs)
         self.sample_plotter = sample_plotter
-        self.sample_metrics = sample_metrics
+        self.sample_metrics = (
+            None if sample_metrics is None else nn.ModuleDict(sample_metrics)
+        )
         self.sample_metric_pre_process_fn = sample_metric_pre_process_fn
         self.noisy_image_plotter = noisy_image_plotter
         self.ema = ExponentialMovingAverage(self.denoiser.parameters(), decay=ema_decay)
@@ -215,7 +217,7 @@ class DiffusionModel(L.LightningModule):
 
     def on_after_backward(self) -> None:
         """Log the gradient norm after the backward pass."""
-        for name, param in self.named_parameters():
+        for name, param in self.denoiser.named_parameters():
             self.log(f"grad/{name}", param.grad.norm())
 
     def on_train_epoch_start(self) -> None:
@@ -243,7 +245,6 @@ class DiffusionModel(L.LightningModule):
     def add_noise(self, x, t):
         while len(t.shape) < len(x.shape):
             t = t.unsqueeze(-1)
-        assert (t != 0).all()
         eps = torch.randn_like(x)
         schedule = self.diffusion_schedule(t)
         z = schedule["alpha_t"] * x + schedule["sigma_t"] * eps
@@ -407,7 +408,9 @@ class DiffusionModel(L.LightningModule):
 
     def configure_optimizers(self):
         """The optimizer for the diffusion model."""
-        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
+        optimizer = torch.optim.Adam(
+            self.denoiser.parameters(), lr=self.hparams.learning_rate
+        )
         return optimizer
 
     def on_train_start(self) -> None:

@@ -58,13 +58,16 @@ class CachedDataset(Dataset):
 def train(
     batch_size=256,
     n_epochs=500,
-    n_steps=100,
-    check_val_every_n_epoch=10,
+    n_steps=300,
+    check_val_every_n_epoch=50,
     log_to_neptune=True,
-    learning_rate=3e-2,
+    learning_rate=1e-3,
     beta_schedule_form="geometric",
     debug=False,
     cache=False,
+    initial_hidden=8,
+    u_steps=2,
+    step_depth=1,
 ):
     transform = transforms.Compose(
         [
@@ -126,9 +129,10 @@ def train(
             "cpu"
         ),
         type="unet",
-        u_steps=2,
-        step_depth=1,
+        u_steps=u_steps,
+        step_depth=step_depth,
         n_channels=1,
+        initial_hidden=initial_hidden,
         diffusion_schedule_kwargs=diffusion_schedule_kwargs,
         n_time_steps=n_steps,
     )
@@ -140,7 +144,7 @@ def train(
     #     tags=["training", "diffusion", "gaussian_mixture"],  # optional
     #     mode="async" if log_to_neptune else "debug",
     # )
-    logger = TensorBoardLogger("tb_logs_orig", name="simplediffusion")
+    logger = TensorBoardLogger("tb_logs", name="simplediffusion")
     logger.log_hyperparams(
         {
             "batch_size": batch_size,
@@ -158,6 +162,7 @@ def train(
         logger=logger,
         check_val_every_n_epoch=check_val_every_n_epoch,
         num_sanity_val_steps=0,
+        gradient_clip_val=1.0,
     )
     trainer.fit(model, train_loader, val_loader)
 
@@ -175,4 +180,4 @@ def train(
 
 
 if __name__ == "__main__":
-    train(beta_schedule_form="logit_linear", debug=False)
+    train(beta_schedule_form="logit_linear", debug=False, cache=True)
