@@ -10,7 +10,7 @@ from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import Dataset, DataLoader
 
 from simple_diffusion.fashion_mnist.plotting import sample_plotter
-from simple_diffusion.model import DiffusionModel
+from simple_diffusion.vdm_model import DiffusionModel
 
 # PyTorch TensorBoard support
 

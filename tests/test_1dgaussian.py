@@ -1,4 +1,4 @@
-from simple_diffusion.gaussian_1d.train import train
+from simple_diffusion.gaussian_1d.train_vdm import train
 
 
 def test_1d_gaussian():

@@ -11,7 +11,7 @@ from lightning.pytorch.tuner import Tuner
 from torch.utils.data import Dataset, DataLoader
 
 from simple_diffusion.cifar.plotting import get_sample_plotter, get_noisy_images_plotter
-from simple_diffusion.model import DiffusionModel
+from simple_diffusion.vdm_model import DiffusionModel
 
 # PyTorch TensorBoard support
 

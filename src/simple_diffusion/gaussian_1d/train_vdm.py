@@ -2,11 +2,11 @@
 
 import lightning as L
 import torch
-from lightning.pytorch.loggers import NeptuneLogger, TensorBoardLogger
+from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import Dataset, DataLoader
 
 from simple_diffusion.gaussian_1d.plotting import sample_plotter
-from simple_diffusion.model import DiffusionModel
+from simple_diffusion.vdm_model import DiffusionModel
 
 SEED = 1337
 NEPTUNE_PROJECT = "davidlibland/simplediffusion"
