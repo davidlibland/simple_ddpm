@@ -29,6 +29,7 @@ class LatentDiffusionModel(BaseDiffusionModel):
         ema_decay=0.9999,
         n_time_steps=100,
         denoiser_kwargs: Dict = {},
+        latent_dim=8,
     ):
         """
         A simple diffusion model.
@@ -82,7 +83,9 @@ class LatentDiffusionModel(BaseDiffusionModel):
         denoiser_kwargs = {**denoiser_kwargs}
         denoiser_type = denoiser_kwargs.pop("type", "fully_connected")
         if denoiser_type == "fully_connected":
-            return FC_Denoiser(**denoiser_kwargs)
+            return FC_Denoiser(
+                latent_shape=(self.hparams.latent_dim,), **denoiser_kwargs
+            )
         elif denoiser_type == "unet":
             return UNet(
                 **denoiser_kwargs,
@@ -94,6 +97,7 @@ class LatentDiffusionModel(BaseDiffusionModel):
         encoder_type = encoder_kwargs.pop("type", "fully_connected")
         if encoder_type == "fully_connected":
             return FCEncoder(
+                latent_dim=self.hparams.latent_dim,
                 **encoder_kwargs,
             )
 
@@ -103,6 +107,7 @@ class LatentDiffusionModel(BaseDiffusionModel):
         decoder_type = decoder_kwargs.pop("type", "fully_connected")
         if decoder_type == "fully_connected":
             return FCDecoder(
+                latent_dim=self.hparams.latent_dim,
                 **decoder_kwargs,
             )
 
@@ -121,7 +126,7 @@ class LatentDiffusionModel(BaseDiffusionModel):
         """The diffusion loss."""
         n = x_latent.size(0)
         u = torch.rand(1, 1).to(x_latent.device)
-        i = torch.arange(n, 1, device=x_latent.device) / n
+        i = (torch.arange(n, device=x_latent.device) / n).view(-1, 1)
         t = (i + u) % 1
         z, t, eps = self.add_noise(x_latent, t)
         gamma_t_norm = self.diffusion_schedule.normalized_log_snr(t)
@@ -130,7 +135,7 @@ class LatentDiffusionModel(BaseDiffusionModel):
         loss = F.mse_loss(eps_tilde, eps, reduction="none")
         # Rescale the loss by the derivative of the log snr:
         loss = gamma_t_prime * loss
-        return {"loss": loss, "t": t}
+        return {"loss": loss.sum(dim=1), "t": t}
 
     def reconstruction_loss(self, x, x_latent) -> torch.Tensor:
         """
@@ -141,7 +146,7 @@ class LatentDiffusionModel(BaseDiffusionModel):
             x_latent (torch.Tensor): The mean of the latent space. Shape (batch, latent)
         """
         x_recon = self.vae_decoder(x_latent)
-        return x_recon.log_prob(x)
+        return -x_recon.log_prob(x)
 
     def latent_loss(self, x_latent_mean) -> torch.Tensor:
         """
@@ -166,16 +171,17 @@ class LatentDiffusionModel(BaseDiffusionModel):
         """The shared step for the training and validation steps."""
         x = batch
         x_latent_mean = self.vae_encoder(x)
+        self.log("train/latent_std", x_latent_mean.std())
 
         n = x_latent_mean.size(0)
         t = torch.zeros(n, 1, device=x_latent_mean.device)
-        x_latent = self.add_noise(x_latent_mean, t)
+        x_latent, *_ = self.add_noise(x_latent_mean, t)
 
         # Compute the latent loss:
         latent_loss = self.latent_loss(x_latent_mean)
 
         # Compute the reconstruction loss:
-        reconstruction_loss = self.reconstruction_loss(x, x_latent_mean)
+        reconstruction_loss = self.reconstruction_loss(x, x_latent)
 
         # Compute the diffusion loss:
         diffusion_loss_dict = self.diffusion_loss(x_latent)
@@ -184,7 +190,15 @@ class LatentDiffusionModel(BaseDiffusionModel):
         loss = (
             latent_loss.mean()
             + reconstruction_loss.mean()
-            + diffusion_loss_dict["loss"].mean()
+            + diffusion_loss_dict["loss"].mean() * self.hparams.n_time_steps / 12
+        )
+
+        self.log("train/latent_loss", latent_loss.mean(), prog_bar=True)
+        self.log("train/reconstruction_loss", reconstruction_loss.mean(), prog_bar=True)
+        self.log(
+            "train/diffusion_loss",
+            diffusion_loss_dict["loss"].mean(),
+            prog_bar=True,
         )
         loss_dict = {
             "total_loss": loss,
@@ -205,7 +219,7 @@ class LatentDiffusionModel(BaseDiffusionModel):
 
     def _generate_samples(self, n, gen):
         """Generate samples from the diffusion model."""
-        z = torch.randn(n, *self.hparams.latent_shape, generator=gen).to(self.device)
+        z = torch.randn(n, self.hparams.latent_dim, generator=gen).to(self.device)
         ts = torch.linspace(1, 0, self.hparams.n_time_steps, device=self.device)
         for t, s in zip(ts, ts[1:]):
             while len(t.shape) < len(z.shape):
@@ -217,4 +231,5 @@ class LatentDiffusionModel(BaseDiffusionModel):
             mean = self.decoder(z, t, s)
             eps = torch.randn(*z.shape, generator=gen).to(self.device)
             z = mean + sigma_s * torch.sqrt(expm1_delta) * eps
-        return mean
+        samples = self.vae_decoder(z).mean
+        return samples

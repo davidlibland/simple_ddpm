@@ -288,7 +288,7 @@ class BaseDiffusionModel(L.LightningModule):
         self.ema.to(self.device)
 
     def on_before_zero_grad(self, *args, **kwargs):
-        self.ema.update(self.denoiser.parameters())
+        self.ema.update(self.trainable_parameters())
 
     def _generate_samples(self, n, gen: torch.Generator):
         """Generate samples from the diffusion model."""

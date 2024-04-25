@@ -12,7 +12,7 @@ class NormalDistribution:
     def log_prob(self, x):
         return -0.5 * (
             torch.log(2 * math.pi * self.var) + (x - self.mean) ** 2 / self.var
-        )
+        ).sum(dim=1)
 
     def sample(self):
         return torch.normal(self.mean, torch.sqrt(self.var))
@@ -51,15 +51,15 @@ class Decoder(nn.Module):
             nn.ReLU(),
             nn.Linear(n_hidden, data_dim),
         )
-        self.log_var_net = nn.Sequential(
-            nn.Linear(latent_dim, n_hidden),
-            nn.LayerNorm(n_hidden),
-            nn.ReLU(),
-            nn.Linear(n_hidden, data_dim),
-        )
+        # self.log_var_net = nn.Sequential(
+        #     nn.Linear(latent_dim, n_hidden),
+        #     nn.LayerNorm(n_hidden),
+        #     nn.ReLU(),
+        #     nn.Linear(n_hidden, data_dim),
+        # )
 
     def forward(self, x):
         x_ = x.view(x.shape[0], -1)
         mean = self.mean_net(x_)
-        log_var = self.log_var_net(x_)
-        return NormalDistribution(mean, torch.exp(log_var))
+        log_var = torch.zeros_like(mean)  # self.log_var_net(x_)
+        return NormalDistribution(mean, 1e-2 * torch.exp(log_var))

@@ -11,6 +11,7 @@ def sample_plotter(real: torch.Tensor, fake: torch.Tensor) -> plt.Figure:
         alpha=0.5,
         label="True",
         color="blue",
+        density=True,
     )
     ax.hist(
         fake.detach().cpu().numpy().flatten(),
@@ -18,6 +19,7 @@ def sample_plotter(real: torch.Tensor, fake: torch.Tensor) -> plt.Figure:
         alpha=0.5,
         label="Fake",
         color="red",
+        density=True,
     )
     ax.legend()
     return fig

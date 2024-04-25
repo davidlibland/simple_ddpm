@@ -65,10 +65,15 @@ def train(
         sample_plotter=sample_plotter,
         diffusion_schedule_kwargs={
             "schedule_type": "logit_linear",
+            "log_snr_max": 6,
+            "log_snr_min": -6,
         },
-        denoiser_kwargs={"type": "fully_connected", "latent_shape": (1,)},
-        encoder_kwargs={"type": "fully_connected", "data_dim": 1, "latent_dim": 8},
-        decoder_kwargs={"type": "fully_connected", "data_dim": 1, "latent_dim": 8},
+        latent_dim=128,
+        denoiser_kwargs={"type": "fully_connected"},
+        encoder_kwargs={"type": "fully_connected", "data_dim": 1},
+        decoder_kwargs={"type": "fully_connected", "data_dim": 1},
+        n_time_steps=30,
+        learning_rate=1e-3,
     )
 
     # Setup the logger and the trainer:
@@ -83,6 +88,7 @@ def train(
         max_epochs=n_epochs,
         logger=logger,
         check_val_every_n_epoch=100,
+        gradient_clip_val=1.0,
     )
     trainer.fit(model, train_loader, val_loader)
 
