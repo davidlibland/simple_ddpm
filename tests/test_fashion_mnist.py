@@ -1,4 +1,4 @@
-from simple_diffusion.fashion_mnist.train import train
+from simple_diffusion.fashion_mnist.train_vdm import train
 
 
 def test_fashion_mnist():
