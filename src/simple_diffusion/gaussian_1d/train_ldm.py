@@ -50,7 +50,7 @@ def train(
     stds=(0.1, 0.1),
     n_samples=1000,
     batch_size=1000,
-    n_epochs=3000,
+    n_epochs=100000,
     n_steps=100,
     beta=0.3,
     log_to_neptune=True,
@@ -72,8 +72,9 @@ def train(
         denoiser_kwargs={"type": "fully_connected"},
         encoder_kwargs={"type": "fully_connected", "data_dim": 1},
         decoder_kwargs={"type": "fully_connected", "data_dim": 1},
-        n_time_steps=30,
+        n_time_steps=1000,
         learning_rate=1e-3,
+        vae_weight=1e3,
     )
 
     # Setup the logger and the trainer:
@@ -87,7 +88,7 @@ def train(
     trainer = L.Trainer(
         max_epochs=n_epochs,
         logger=logger,
-        check_val_every_n_epoch=100,
+        check_val_every_n_epoch=1000,
         gradient_clip_val=1.0,
     )
     trainer.fit(model, train_loader, val_loader)

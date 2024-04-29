@@ -110,6 +110,7 @@ class DiffusionModel(BaseDiffusionModel):
         loss = gamma_t_prime * loss
         loss_dict = {
             "total_loss": loss.mean(),
+            "elbo": loss.mean(),
             "diffusion_loss": loss.view(n, -1).mean(1),
             "t": t,
         }

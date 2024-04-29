@@ -22,6 +22,7 @@ IMAGE_DIM = 32
 
 # Set the seed:
 L.seed_everything(SEED)
+torch.set_float32_matmul_precision("medium")
 
 
 class DropLabels(Dataset):
@@ -82,7 +83,7 @@ def log_figure(name, figure, logger):
 
 
 def train(
-    batch_size=128,  # 2**11,
+    batch_size=512,  # 2**11,
     n_epochs=500,
     n_steps=1000,
     check_val_every_n_epoch=50,

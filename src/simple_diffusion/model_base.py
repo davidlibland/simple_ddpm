@@ -112,6 +112,7 @@ class BaseDiffusionModel(L.LightningModule):
         loss_dict = self._shared_step(batch)
         loss = loss_dict["total_loss"]
         self.log("train/loss", loss, prog_bar=True)
+        self.log("train/elbo", loss_dict["elbo"], prog_bar=True)
         return loss
 
     def _shared_step(self, batch) -> Dict[str, torch.Tensor]:
@@ -188,7 +189,7 @@ class BaseDiffusionModel(L.LightningModule):
         total_loss = loss_dict["total_loss"]
         diffusion_loss = loss_dict["diffusion_loss"]
         t = loss_dict["t"]
-        self.log("val/loss", total_loss, prog_bar=True)
+        self.log("val/elbo", loss_dict["elbo"], prog_bar=True)
         generate_samples = any(
             [
                 self.sample_metrics is not None,
