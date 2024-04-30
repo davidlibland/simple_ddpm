@@ -101,7 +101,9 @@ class ConvDecoder(nn.Module):
         self.top_height = height // 2**depth
         self.top_width = width // 2**depth
         self.hidden_dim = hidden_dim
-        self.in_linear = nn.Linear(latent_dim, hidden_dim * self.top_height * self.top_width)
+        self.in_linear = nn.Linear(
+            latent_dim, hidden_dim * self.top_height * self.top_width
+        )
         blocks = []
         for _ in reversed(range(depth)):
             blocks.append(nn.UpsamplingNearest2d(scale_factor=2))
