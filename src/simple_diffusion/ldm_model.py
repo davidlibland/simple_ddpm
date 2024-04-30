@@ -7,6 +7,7 @@ import torch.nn.functional as F
 from torchmetrics import Metric
 
 from simple_diffusion.conv_vae import ConvEncoder, ConvDecoder
+from simple_diffusion.resnet_denoiser import ResNet as ResNetDenoiser
 from simple_diffusion.fully_connected_denoiser import Denoiser as FC_Denoiser
 from simple_diffusion.fully_connected_vae import (
     Encoder as FCEncoder,
@@ -90,8 +91,9 @@ class LatentDiffusionModel(BaseDiffusionModel):
             return FC_Denoiser(
                 latent_shape=(self.hparams.latent_dim,), **denoiser_kwargs
             )
-        elif denoiser_type == "unet":
-            return UNet(
+        elif denoiser_type == "resnet":
+            return ResNetDenoiser(
+                latent_dim=self.hparams.latent_dim,
                 **denoiser_kwargs,
             )
 
