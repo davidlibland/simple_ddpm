@@ -32,6 +32,7 @@ class LatentDiffusionModel(BaseDiffusionModel):
         denoiser_kwargs: Dict = {},
         vae_weight: float = 1.0,
         latent_dim=8,
+        weight_decay=1e-4,
     ):
         """
         A simple diffusion model.
@@ -54,6 +55,7 @@ class LatentDiffusionModel(BaseDiffusionModel):
             noisy_image_plotter=noisy_image_plotter,
             ema_decay=ema_decay,
             n_time_steps=n_time_steps,
+            weight_decay=weight_decay,
         )
         self.save_hyperparameters(
             ignore=[

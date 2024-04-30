@@ -28,6 +28,7 @@ class BaseDiffusionModel(L.LightningModule):
         noisy_image_plotter=None,
         ema_decay=0.9999,
         n_time_steps=100,
+        weight_decay=1e-4,
     ):
         """
         A simple diffusion model.
@@ -106,8 +107,10 @@ class BaseDiffusionModel(L.LightningModule):
 
     def configure_optimizers(self):
         """The optimizer for the diffusion model."""
-        optimizer = torch.optim.Adam(
-            self.trainable_parameters(), lr=self.hparams.learning_rate
+        optimizer = torch.optim.AdamW(
+            self.trainable_parameters(),
+            lr=self.hparams.learning_rate,
+            weight_decay=self.hparams.weight_decay,
         )
         return optimizer
 

@@ -23,6 +23,7 @@ class DiffusionModel(BaseDiffusionModel):
         noisy_image_plotter=None,
         ema_decay=0.9999,
         n_time_steps=100,
+        weight_decay=1e-4,
         **denoiser_kwargs,
     ):
         """
@@ -47,6 +48,7 @@ class DiffusionModel(BaseDiffusionModel):
             noisy_image_plotter=noisy_image_plotter,
             ema_decay=ema_decay,
             n_time_steps=n_time_steps,
+            weight_decay=weight_decay,
         )
         self.save_hyperparameters(
             ignore=[
