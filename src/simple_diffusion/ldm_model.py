@@ -72,13 +72,13 @@ class LatentDiffusionModel(BaseDiffusionModel):
         self.vae_decoder = self._build_decoder(**decoder_kwargs)
         self.configure_model_base()
 
-    def trainable_parameters(self):
+    def trainable_parameter_dict(self):
         """The trainable parameters of the model."""
-        return (
-            list(self.denoiser.parameters())
-            + list(self.vae_encoder.parameters())
-            + list(self.vae_decoder.parameters())
-        )
+        return {
+            **{f"denoiser/{k}": v for k, v in self.denoiser.named_parameters()},
+            **{f"encoder/{k}": v for k, v in self.vae_encoder.named_parameters()},
+            **{f"decoder/{k}": v for k, v in self.vae_decoder.named_parameters()},
+        }
 
     def _build_denoiser(self, **denoiser_kwargs):
         """Build the denoiser network."""
@@ -182,11 +182,10 @@ class LatentDiffusionModel(BaseDiffusionModel):
         mean = alpha_t * x_latent_mean
         var = sigma_t**2 + alpha_t**2 * sigma_s**2
         kl_divergence = -torch.log(var) / 2 + (mean**2 + var) / 2 - 0.5
-        standard_scale_factor = 1 / alpha_t**2
         kls = kl_divergence.sum(dim=1)
         return {
             "latent_loss": kls,
-            "standardized_kls": kls * standard_scale_factor,
+            "standardized_kls": (x_latent_mean**2).sum(dim=1),
         }
 
     def _shared_step(self, batch):

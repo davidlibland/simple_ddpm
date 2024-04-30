@@ -7,6 +7,7 @@ import torch
 import torchvision
 import torchvision.transforms.v2 as transforms
 from lightning.pytorch.loggers import TensorBoardLogger
+from lightning.pytorch.callbacks import ModelSummary
 from torch.utils.data import Dataset, DataLoader
 
 from simple_diffusion.fashion_mnist.plotting import sample_plotter
@@ -133,12 +134,16 @@ def train(
             "n_channels": 1,
             "width": IMAGE_DIM,
             "height": IMAGE_DIM,
+            "hidden_dim": 32,
+            "depth": 1,
         },
         decoder_kwargs={
             "type": "conv",
             "n_channels": 1,
             "width": IMAGE_DIM,
             "height": IMAGE_DIM,
+            "hidden_dim": 32,
+            "depth": 1,
         },
         latent_dim=32,
         diffusion_schedule_kwargs=diffusion_schedule_kwargs,
@@ -171,6 +176,7 @@ def train(
         check_val_every_n_epoch=check_val_every_n_epoch,
         num_sanity_val_steps=0,
         gradient_clip_val=1.0,
+        callbacks=[ModelSummary(max_depth=2)],
     )
     trainer.fit(model, train_loader, val_loader)
 

@@ -1,6 +1,6 @@
 """A simple diffusion model"""
 
-from typing import Dict, Callable, Tuple
+from typing import Dict, Callable, Tuple, List
 
 import lightning as L
 import matplotlib.pyplot as plt
@@ -67,9 +67,13 @@ class BaseDiffusionModel(L.LightningModule):
             self.trainable_parameters(), decay=self.hparams.ema_decay
         )
 
-    def trainable_parameters(self):
+    def trainable_parameter_dict(self) -> Dict[str, nn.Parameter]:
         """The trainable parameters of the model."""
         raise NotImplementedError
+
+    def trainable_parameters(self) -> List[nn.Parameter]:
+        """The trainable parameters of the model."""
+        return list(self.trainable_parameter_dict().values())
 
     def log_signal_to_noise(self):
         """Compute the log signal to noise ratio of the denoiser."""
@@ -289,6 +293,9 @@ class BaseDiffusionModel(L.LightningModule):
         self.ema.to(self.device)
 
     def on_before_zero_grad(self, *args, **kwargs):
+        for n, p in self.trainable_parameter_dict().items():
+            if p.grad is not None:
+                self.log(f"grad_norm/{n}", p.grad.norm())
         self.ema.update(self.trainable_parameters())
 
     def _generate_samples(self, n, gen: torch.Generator):

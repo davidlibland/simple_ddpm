@@ -63,9 +63,9 @@ class DiffusionModel(BaseDiffusionModel):
         self.denoiser = self._build_denoiser(**denoiser_kwargs)
         self.configure_model_base()
 
-    def trainable_parameters(self):
+    def trainable_parameter_dict(self):
         """The trainable parameters of the model."""
-        return self.denoiser.parameters()
+        return self.denoiser.named_parameters()
 
     def _build_denoiser(self, **denoiser_kwargs):
         """Build the denoiser network."""

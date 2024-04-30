@@ -1,7 +1,9 @@
 import math
 
+import einops
 import torch
 import torch.nn as nn
+from torch.nn.utils.parametrizations import spectral_norm
 
 
 class NormalDistribution:
@@ -21,12 +23,10 @@ class NormalDistribution:
 class ResNet2d(nn.Module):
     """This is taken from the VDVAE model"""
 
-    def __init__(self, n_hidden, n_channels=None):
+    def __init__(self, n_hidden, total_depth):
         super().__init__()
-        if n_channels is None:
-            n_channels = n_hidden
-        self.net = nn.Sequential(
-            nn.Conv2d(n_channels, n_hidden, kernel_size=1, padding=0),
+        self.res_net = nn.Sequential(
+            nn.Conv2d(n_hidden, n_hidden, kernel_size=1, padding=0),
             nn.GroupNorm(1, n_hidden),
             nn.GELU(),
             nn.Conv2d(n_hidden, n_hidden, kernel_size=3, padding=1),
@@ -35,83 +35,98 @@ class ResNet2d(nn.Module):
             nn.Conv2d(n_hidden, n_hidden, kernel_size=3, padding=1),
             nn.GroupNorm(1, n_hidden),
             nn.GELU(),
-            nn.Conv2d(n_channels, n_hidden, kernel_size=1, padding=0),
+            nn.Conv2d(n_hidden, n_hidden, kernel_size=1, padding=0),
         )
+        # Scale the output of the blocks by sqrt(1 / total_depth):
+        self.res_net[-1].weight.data *= math.sqrt(1 / total_depth)
+        # Initialize the last layer to zero:
+        self.res_net[-1].bias.data.zero_()
 
     def forward(self, x):
-        y = self.net(x)
+        y = self.res_net(x)
         return y + x
 
 
 class ConvEncoder(nn.Module):
     """This is based off the VDVAE model"""
 
-    def __init__(self, n_channels, latent_dim, hidden_dim, depth=3, n_resnet_blocks=1):
+    def __init__(
+        self,
+        n_channels,
+        height,
+        width,
+        latent_dim,
+        hidden_dim,
+        depth=3,
+        n_resnet_blocks=1,
+    ):
         super().__init__()
-        blocks = []
+        blocks = [nn.Conv2d(n_channels, hidden_dim, kernel_size=3, padding=1)]
         for i in range(depth):
-            for _ in range(n_resnet_blocks):
+            for j in range(n_resnet_blocks):
                 blocks.append(
                     ResNet2d(
-                        hidden_dim * 2**i, n_channels=None if blocks else n_channels
+                        hidden_dim,
+                        total_depth=depth * n_resnet_blocks,
                     )
                 )
             blocks.append(nn.AvgPool2d(2))
-        self.net = nn.Sequential(
-            *blocks, nn.Flatten(), nn.Linear(hidden_dim, latent_dim)
-        )
+            height //= 2
+            width //= 2
+        self.height = height
+        self.width = width
+        self.enc_net = nn.Sequential(*blocks)
+        self.out = nn.Linear(hidden_dim * height * width, latent_dim)
 
     def forward(self, x):
-        y = self.net(x)
-        return y
+        y = self.enc_net(x)
+        y = einops.rearrange(y, "... c h w -> ... (c h w)")
+        return self.out(y)
 
 
 class ConvDecoder(nn.Module):
     """This is based off the VDVAE model"""
 
-    def __init__(self, n_channels, latent_dim, hidden_dim, depth=3, n_resnet_blocks=1):
+    def __init__(
+        self,
+        n_channels,
+        height,
+        width,
+        latent_dim,
+        hidden_dim,
+        depth=3,
+        n_resnet_blocks=1,
+    ):
         super().__init__()
-        self.in_linear = nn.Linear(latent_dim, hidden_dim)
+        self.top_height = height // 2**depth
+        self.top_width = width // 2**depth
+        self.hidden_dim = hidden_dim
+        self.in_linear = nn.Linear(latent_dim, hidden_dim * self.top_height * self.top_width)
         blocks = []
-        for i in reversed(range(depth)):
-            blocks.append(nn.UpsamplingNearest2d(2))
+        for _ in reversed(range(depth)):
+            blocks.append(nn.UpsamplingNearest2d(scale_factor=2))
             for _ in range(n_resnet_blocks):
                 blocks.append(
                     ResNet2d(
-                        hidden_dim * 2**i,
+                        hidden_dim,
+                        total_depth=depth * n_resnet_blocks,
                     )
                 )
-        self.net = nn.Sequential(
-            *blocks, nn.Conv1d(hidden_dim, n_channels, kernel_size=2, padding=1)
+        self.dec_net = nn.Sequential(
+            *blocks,
+            nn.Conv2d(hidden_dim, n_channels, kernel_size=3, padding=1),
         )
 
     def forward(self, x):
-        x =
-        y = self.net(x)
-        return y
-
-
-class ConvDecoder(nn.Module):
-    """A simple fully connected denoiser network."""
-
-    def __init__(self, n_channels, width, height, latent_dim, n_hidden=None):
-        super().__init__()
-        if n_hidden is None:
-            n_hidden = latent_dim
-        self.n_channels = n_channels
-        self.width = width
-        self.height = height
-        self.mean_net = nn.Sequential(
-            nn.Linear(latent_dim, n_hidden),
-            nn.LayerNorm(n_hidden),
-            nn.ReLU(),
-            nn.Linear(n_hidden, n_channels * width * height),
+        y = self.in_linear(x)
+        y = einops.rearrange(
+            y,
+            "... (c h w) -> ... c h w",
+            w=self.top_width,
+            h=self.top_height,
+            c=self.hidden_dim,
         )
 
-    def forward(self, x):
-        x_ = x.view(x.shape[0], -1)
-        mean = self.mean_net(x_).view(
-            x.shape[0], self.n_channels, self.width, self.height
-        )
-        log_var = torch.zeros_like(mean)  # self.log_var_net(x_)
-        return NormalDistribution(mean, 1e-2 * torch.exp(log_var))
+        y = self.dec_net(y)
+        log_var = torch.zeros_like(y)
+        return NormalDistribution(y, 1e-2 * torch.exp(log_var))
