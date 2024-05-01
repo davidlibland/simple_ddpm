@@ -14,7 +14,7 @@ from simple_diffusion.fully_connected_vae import (
     Decoder as FCDecoder,
 )
 from simple_diffusion.model_base import BaseDiffusionModel
-from simple_diffusion.unet import UNet
+from simple_diffusion.unet_vae import UnetDecoder, UnetEncoder
 
 
 class LatentDiffusionModel(BaseDiffusionModel):
@@ -111,6 +111,11 @@ class LatentDiffusionModel(BaseDiffusionModel):
                 latent_dim=self.hparams.latent_dim,
                 **encoder_kwargs,
             )
+        if encoder_type == "unet":
+            return UnetEncoder(
+                latent_dim=self.hparams.latent_dim,
+                **encoder_kwargs,
+            )
 
     def _build_decoder(self, **decoder_kwargs):
         """Build the denoiser network."""
@@ -123,6 +128,11 @@ class LatentDiffusionModel(BaseDiffusionModel):
             )
         if decoder_type == "conv":
             return ConvDecoder(
+                latent_dim=self.hparams.latent_dim,
+                **decoder_kwargs,
+            )
+        if decoder_type == "unet":
+            return UnetDecoder(
                 latent_dim=self.hparams.latent_dim,
                 **decoder_kwargs,
             )
