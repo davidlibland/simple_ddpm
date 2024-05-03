@@ -6,14 +6,15 @@ import torch
 import torch.nn.functional as F
 from torchmetrics import Metric
 
+from simple_diffusion.aa_vae import Encoder as AAEncoder, Decoder as AADecoder
 from simple_diffusion.conv_vae import ConvEncoder, ConvDecoder
-from simple_diffusion.resnet_denoiser import ResNet as ResNetDenoiser
 from simple_diffusion.fully_connected_denoiser import Denoiser as FC_Denoiser
 from simple_diffusion.fully_connected_vae import (
     Encoder as FCEncoder,
     Decoder as FCDecoder,
 )
 from simple_diffusion.model_base import BaseDiffusionModel
+from simple_diffusion.resnet_denoiser import ResNet as ResNetDenoiser
 from simple_diffusion.unet_vae import UnetDecoder, UnetEncoder
 
 
@@ -116,6 +117,11 @@ class LatentDiffusionModel(BaseDiffusionModel):
                 latent_dim=self.hparams.latent_dim,
                 **encoder_kwargs,
             )
+        if encoder_type == "aa":
+            return AAEncoder(
+                latent_dim=self.hparams.latent_dim,
+                **encoder_kwargs,
+            )
 
     def _build_decoder(self, **decoder_kwargs):
         """Build the denoiser network."""
@@ -133,6 +139,11 @@ class LatentDiffusionModel(BaseDiffusionModel):
             )
         if decoder_type == "unet":
             return UnetDecoder(
+                latent_dim=self.hparams.latent_dim,
+                **decoder_kwargs,
+            )
+        if decoder_type == "aa":
+            return AADecoder(
                 latent_dim=self.hparams.latent_dim,
                 **decoder_kwargs,
             )
@@ -163,12 +174,12 @@ class LatentDiffusionModel(BaseDiffusionModel):
         loss = gamma_t_prime * loss
         # Note that the total integral has bounds given by the lower and upper snr
         # To control for that we rescale the loss appropriately.
-        loss = loss / (
-            self.diffusion_schedule.log_snr_max - self.diffusion_schedule.log_snr_min
-        )
+        loss = loss  # / (
+        #     self.diffusion_schedule.log_snr_max - self.diffusion_schedule.log_snr_min
+        # )
         return {"loss": loss.sum(dim=1), "t": t}
 
-    def reconstruction_loss(self, x, x_latent) -> torch.Tensor:
+    def reconstruction(self, x, x_latent) -> Dict[str, "Distribution"]:
         """
         The reconstruction loss term from the VAE
 
@@ -177,9 +188,9 @@ class LatentDiffusionModel(BaseDiffusionModel):
             x_latent (torch.Tensor): The mean of the latent space. Shape (batch, latent)
         """
         x_recon = self.vae_decoder(x_latent)
-        return -x_recon.log_prob(x)
+        return x_recon
 
-    def latent_loss(self, x_latent_mean) -> Dict[str, torch.Tensor]:
+    def latent_loss(self, x_latent_mean) -> torch.Tensor:
         """
         The KL loss term from the VAE
 
@@ -197,10 +208,7 @@ class LatentDiffusionModel(BaseDiffusionModel):
         var = sigma_t**2 + alpha_t**2 * sigma_s**2
         kl_divergence = -torch.log(var) / 2 + (mean**2 + var) / 2 - 0.5
         kls = kl_divergence.sum(dim=1)
-        return {
-            "latent_loss": kls,
-            "standardized_kls": (x_latent_mean**2).sum(dim=1),
-        }
+        return kls
 
     def _shared_step(self, batch):
         """The shared step for the training and validation steps."""
@@ -213,12 +221,11 @@ class LatentDiffusionModel(BaseDiffusionModel):
         x_latent, _, eps_0 = self.add_noise(x_latent_mean, t)
 
         # Compute the latent loss:
-        latent_loss_dict = self.latent_loss(x_latent_mean)
-        latent_loss = latent_loss_dict["latent_loss"]
-        standardized_kls = latent_loss_dict["standardized_kls"]
+        latent_loss = self.latent_loss(x_latent_mean)
 
         # Compute the reconstruction loss:
-        reconstruction_loss = self.reconstruction_loss(x, x_latent)
+        reconstruction = self.reconstruction(x, x_latent)
+        reconstruction_loss = -reconstruction.log_prob(x)
 
         # Compute the diffusion loss:
         diffusion_loss_dict = self.diffusion_loss(x_latent_mean)
@@ -227,17 +234,16 @@ class LatentDiffusionModel(BaseDiffusionModel):
         # diffusion loss by the number of time steps
         # This is because we are taking a single MC sample of the diffusion loss per
         # batch sample, but it appears n_time_steps times in the loss.
-        diffusion_scale_factor = self.hparams.n_time_steps
         # Combine the losses:
         loss = (
-            standardized_kls.mean() * self.hparams.vae_weight
+            latent_loss.mean() * self.hparams.vae_weight
             + reconstruction_loss.mean() * self.hparams.vae_weight
-            + diffusion_loss_dict["loss"].mean() * diffusion_scale_factor
+            + diffusion_loss_dict["loss"].mean()
         )
         elbo = (
             latent_loss.mean()
             + reconstruction_loss.mean()
-            + diffusion_loss_dict["loss"].mean() * diffusion_scale_factor
+            + diffusion_loss_dict["loss"].mean()
         ).detach()
 
         self.log("train/latent_loss", latent_loss.mean(), prog_bar=True)
@@ -247,6 +253,7 @@ class LatentDiffusionModel(BaseDiffusionModel):
             diffusion_loss_dict["loss"].mean(),
             prog_bar=True,
         )
+
         loss_dict = {
             "total_loss": loss,
             "diffusion_loss": diffusion_loss_dict["loss"],
@@ -254,6 +261,8 @@ class LatentDiffusionModel(BaseDiffusionModel):
             "reconstruction_loss": reconstruction_loss.mean(),
             "latent_loss": latent_loss.mean(),
             "elbo": elbo,
+            "reconstruction": reconstruction.sample(),
+            "reconstruction_mean": reconstruction.mean,
         }
         return loss_dict
 

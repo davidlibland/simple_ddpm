@@ -203,6 +203,13 @@ class BaseDiffusionModel(L.LightningModule):
                 batch_idx == 0 and self.sample_plotter is not None,
             ]
         )
+        if batch_idx == 0 and "reconstruction" in loss_dict:
+            fig = self.sample_plotter(batch, loss_dict["reconstruction"])
+            self.log_image("val_images/reconstruction", fig)
+        if batch_idx == 0 and "reconstruction_mean" in loss_dict:
+            fig = self.sample_plotter(batch, loss_dict["reconstruction_mean"])
+            self.log_image("val_images/reconstruction_mean", fig)
+
         if generate_samples:
             # Have the same seed as the batch, to keep
             # sample generation smooth across epochs:
