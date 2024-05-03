@@ -138,6 +138,155 @@ class ChannelAttention(nn.Module):
         )
 
 
+class FlattenAttention(nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        lookup_dim=None,
+        n_heads=8,
+        n_freqs=32,
+        n_groups=N_GROUPS,
+    ):
+        super().__init__()
+        if out_channels % n_heads != 0:
+            raise ValueError(
+                f"Number of heads {n_heads} must divide number of channels {out_channels}"
+            )
+        out_channels_per_head = out_channels // n_heads
+        if lookup_dim is None:
+            lookup_dim = in_channels
+        self.norm = nn.GroupNorm(num_groups=n_groups, num_channels=in_channels)
+        self.kconv = nn.Conv2d(
+            in_channels + 2 * n_freqs, lookup_dim * n_heads, kernel_size=1
+        )
+        self.vconv = nn.Conv2d(
+            in_channels + 2 * n_freqs, out_channels_per_head * n_heads, kernel_size=1
+        )
+        self.query = nn.Parameter(torch.randn(1, n_heads, 1, lookup_dim))
+        self.n_heads = n_heads
+        self.register_buffer(
+            "fourier_freqs",
+            torch.arange(1, n_freqs, 2).float() / (2 * n_freqs),
+        )
+
+    def forward(self, x):
+        x_norm = self.norm(x)
+        w = x.size(-1)
+        h = x.size(-2)
+        tw = torch.arange(w, device=x.device).float() / w
+        th = torch.arange(h, device=x.device).float() / h
+        th = self.encode_time(th.view([1, 1, -1, 1])).expand(
+            x.size(0), -1, -1, x.size(-1)
+        )
+        tw = self.encode_time(tw.view([1, 1, 1, -1])).expand(
+            x.size(0), -1, x.size(-2), -1
+        )
+        x_loc_emb = torch.cat(
+            [x_norm, th, tw],
+            dim=1,
+        )
+        k = einops.rearrange(
+            self.kconv(x_loc_emb),
+            "b (heads c) h w -> b heads (h w) c",
+            heads=self.n_heads,
+        )
+        v = einops.rearrange(
+            self.vconv(x_loc_emb),
+            "b (heads c) h w -> b heads (h w) c",
+            heads=self.n_heads,
+        )
+        attn = F.scaled_dot_product_attention(self.query, k, v)
+        return attn.reshape(x.size(0), -1)
+
+    def encode_time(self, t):
+        return torch.cat(
+            [
+                torch.sin(t * self.fourier_freqs.view([1, -1, 1, 1]) * 2 * torch.pi),
+                torch.cos(t * self.fourier_freqs.view([1, -1, 1, 1]) * 2 * torch.pi),
+            ],
+            dim=1,
+        )
+
+
+class UnFlattenAttention(nn.Module):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        width,
+        height,
+        n_chunks=None,
+        lookup_dim=None,
+        n_heads=8,
+        n_freqs=32,
+        n_groups=N_GROUPS,
+    ):
+        super().__init__()
+        if out_channels % n_heads != 0:
+            raise ValueError(
+                f"Number of heads {n_heads} must divide number of channels {out_channels}"
+            )
+        out_channels_per_head = out_channels // n_heads
+        if lookup_dim is None:
+            lookup_dim = in_channels
+        if n_chunks is None:
+            n_chunks = height * width
+        self.norm = nn.GroupNorm(num_groups=n_groups, num_channels=in_channels)
+        self.klin = nn.Linear(in_channels, lookup_dim * n_heads * n_chunks)
+        self.vlin = nn.Linear(in_channels, out_channels_per_head * n_heads * n_chunks)
+        self.qconv_pos = nn.Conv2d(2 * n_freqs, lookup_dim * n_heads, kernel_size=1)
+        self.qlin_input = nn.Linear(in_channels, lookup_dim * n_heads)
+        self.n_heads = n_heads
+        self.n_chunks = n_chunks
+        self.register_buffer(
+            "fourier_freqs",
+            torch.arange(1, n_freqs, 2).float() / (2 * n_freqs),
+        )
+
+        tw = torch.arange(width).float() / width
+        th = torch.arange(height).float() / height
+        th = self.encode_time(th.view([1, 1, -1, 1])).expand(1, -1, -1, width)
+        tw = self.encode_time(tw.view([1, 1, 1, -1])).expand(1, -1, height, -1)
+        self.register_buffer("pos_encoding", torch.cat([th, tw], dim=1))
+        self.width = width
+        self.height = height
+
+    def forward(self, x):
+        x_norm = self.norm(x)
+        q = einops.rearrange(
+            self.qconv_pos(self.pos_encoding)
+            + self.qlin_input(x).view(x.size(0), -1, 1, 1),
+            "b (heads c) h w -> b heads (h w) c",
+            heads=self.n_heads,
+        )
+        k = einops.rearrange(
+            self.klin(x_norm),
+            "b (heads chunks c) -> b heads chunks c",
+            heads=self.n_heads,
+            chunks=self.n_chunks,
+        )
+        v = einops.rearrange(
+            self.vlin(x_norm),
+            "b (heads chunks c) -> b heads chunks c",
+            heads=self.n_heads,
+            chunks=self.n_chunks,
+        )
+        attn = F.scaled_dot_product_attention(q, k, v)
+        return einops.rearrange(
+            attn, "b heads (h w) c -> b (heads c) h w", w=self.width, h=self.height
+        )
+
+    def encode_time(self, t):
+        return torch.cat(
+            [
+                torch.sin(t * self.fourier_freqs.view([1, -1, 1, 1]) * 2 * torch.pi),
+                torch.cos(t * self.fourier_freqs.view([1, -1, 1, 1]) * 2 * torch.pi),
+            ],
+            dim=1,
+        )
+
+
 class ConvEncoder(nn.Module):
     """This is based off the VDVAE model"""
 
@@ -152,7 +301,9 @@ class ConvEncoder(nn.Module):
         n_resnet_blocks=1,
     ):
         super().__init__()
-        blocks = [nn.Conv2d(n_channels, hidden_dim, kernel_size=3, padding=1)]
+        blocks = [
+            spectral_norm(nn.Conv2d(n_channels, hidden_dim, kernel_size=3, padding=1))
+        ]
         for i in range(depth):
             for _ in range(n_resnet_blocks):
                 blocks.append(
@@ -175,11 +326,10 @@ class ConvEncoder(nn.Module):
         self.height = height
         self.width = width
         self.enc_net = nn.Sequential(*blocks)
-        self.out = nn.Linear((hidden_dim * 4**depth) * height * width, latent_dim)
+        self.out = FlattenAttention(hidden_dim * 4**depth, latent_dim)
 
     def forward(self, x):
         y = self.enc_net(x)
-        y = einops.rearrange(y, "... c h w -> ... (c h w)")
         return self.out(y)
 
 
@@ -201,12 +351,16 @@ class ConvDecoder(nn.Module):
         self.top_width = width // 2**depth
         self.depth = depth
         self.hidden_dim = hidden_dim
-        self.in_linear = nn.Linear(
-            latent_dim, hidden_dim * 4**depth * self.top_height * self.top_width
+        self.inattn = UnFlattenAttention(
+            latent_dim,
+            hidden_dim * 4 ** (depth - 1),
+            width=self.top_width * 2,
+            height=self.top_height * 2,
         )
         blocks = []
         for i in reversed(range(depth)):
-            blocks.append(UnStackUpsample(2, 2))
+            if i < depth - 1:
+                blocks.append(UnStackUpsample(2, 2))
             for _ in range(n_resnet_blocks):
                 blocks.append(
                     ResNet2d(
@@ -220,14 +374,14 @@ class ConvDecoder(nn.Module):
         )
 
     def forward(self, x):
-        y = self.in_linear(x)
-        y = einops.rearrange(
-            y,
-            "... (c h w) -> ... c h w",
-            w=self.top_width,
-            h=self.top_height,
-            c=self.hidden_dim * 4**self.depth,
-        )
+        y = self.inattn(x)
+        # y = einops.rearrange(
+        #     y,
+        #     "... (c h w) -> ... c h w",
+        #     w=self.top_width,
+        #     h=self.top_height,
+        #     c=self.hidden_dim * 4**self.depth,
+        # )
 
         y = self.dec_net(y)
         log_var = torch.zeros_like(y)

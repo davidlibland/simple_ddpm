@@ -6,12 +6,14 @@ import lightning as L
 import torch
 import torchvision
 import torchvision.transforms.v2 as transforms
-from lightning.pytorch.loggers import TensorBoardLogger
 from lightning.pytorch.callbacks import ModelSummary
+from lightning.pytorch.loggers import TensorBoardLogger
 from torch.utils.data import Dataset, DataLoader
 
 from simple_diffusion.fashion_mnist.plotting import sample_plotter
 from simple_diffusion.ldm_model import LatentDiffusionModel
+
+torch.set_float32_matmul_precision("medium")
 
 # PyTorch TensorBoard support
 
@@ -57,12 +59,13 @@ class CachedDataset(Dataset):
 
 
 def train(
-    batch_size=256,
-    n_epochs=500,
-    n_steps=300,
-    check_val_every_n_epoch=50,
+    batch_size=2**11,
+    n_epochs=10000,
+    n_steps=1000,
+    check_val_every_n_epoch=100,
     log_to_neptune=True,
-    learning_rate=1e-3,
+    learning_rate=3e-4,
+    weight_decay=1e-4,
     beta_schedule_form="geometric",
     debug=False,
     cache=False,
@@ -128,26 +131,45 @@ def train(
         sample_metric_pre_process_fn=lambda gray_img: gray_img.repeat(1, 3, 1, 1).to(
             "cpu"
         ),
-        denoiser_kwargs={"type": "fully_connected"},
+        denoiser_kwargs={"type": "resnet", "n_blocks": 10},
+        # encoder_kwargs={
+        #     "type": "unet",
+        #     "n_channels": 1,
+        #     "width": IMAGE_DIM,
+        #     "height": IMAGE_DIM,
+        #     "hidden_dim": 32,
+        #     "depth": 2,
+        #     "n_resnet_blocks": 2,
+        # },
         encoder_kwargs={
-            "type": "conv",
-            "n_channels": 1,
+            "type": "aa",
+            "hidden_size": 256,
+            "n_layers": 3,
             "width": IMAGE_DIM,
             "height": IMAGE_DIM,
-            "hidden_dim": 32,
-            "depth": 1,
+            "n_channels": 1,
         },
+        # decoder_kwargs={
+        #     "type": "unet",
+        #     "n_channels": 1,
+        #     "width": IMAGE_DIM,
+        #     "height": IMAGE_DIM,
+        #     "hidden_dim": 32,
+        #     "depth": 2,
+        #     "n_resnet_blocks": 2,
+        # },
         decoder_kwargs={
-            "type": "conv",
-            "n_channels": 1,
+            "type": "aa",
+            "hidden_size": 512,
+            "n_layers": 3,
             "width": IMAGE_DIM,
             "height": IMAGE_DIM,
-            "hidden_dim": 32,
-            "depth": 1,
+            "n_channels": 1,
         },
-        latent_dim=32,
+        latent_dim=128,
         diffusion_schedule_kwargs=diffusion_schedule_kwargs,
         n_time_steps=n_steps,
+        weight_decay=weight_decay,
     )
 
     # Setup the logger and the trainer:

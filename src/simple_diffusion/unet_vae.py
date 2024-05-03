@@ -4,7 +4,6 @@ import einops
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils.parametrizations import spectral_norm
 
 N_GROUPS = 1
 
@@ -154,7 +153,7 @@ class UnetEncoder(nn.Module):
         super().__init__()
         if latent_dim % (depth + 1) != 0:
             raise ValueError(
-                f"Latent dimension {latent_dim} must be divisible by depth+1 {depth+1}"
+                f"Latent dimension {latent_dim} must be divisible by depth + 1 {depth + 1}"
             )
         blocks = [nn.Conv2d(n_channels, hidden_dim, kernel_size=3, padding=1)]
         connections = []
@@ -172,15 +171,19 @@ class UnetEncoder(nn.Module):
             height //= 2
             width //= 2
             connections.append(
-                nn.Sequential(
-                    # nn.Conv2d(
-                    #     hidden_dim, hidden_dim, kernel_size=2, padding=0, stride=2
-                    # ),
-                    nn.Flatten(1),
-                    # nn.LayerNorm(hidden_dim * height * width),
-                    # nn.GELU(),
-                    nn.Linear(hidden_dim * height * width, latent_dim // (depth + 1)),
+                # nn.Sequential(
+                nn.Conv2d(
+                    hidden_dim,
+                    latent_dim // (depth + 1),
+                    kernel_size=2,
+                    padding=0,
+                    stride=2,
                 )
+                # nn.Flatten(1),
+                # nn.LayerNorm(hidden_dim * height * width),
+                # nn.GELU(),
+                # nn.Linear(hidden_dim * height * width, latent_dim // (depth + 1)),
+                # )
             )
         self.blocks = nn.ModuleList(blocks)
         self.connections = nn.ModuleList(connections)
@@ -192,7 +195,7 @@ class UnetEncoder(nn.Module):
         z = []
         for block, connector in zip(self.blocks, self.connections):
             x = block(x)
-            z.append(connector(x))
+            z.append(connector(x).mean(dim=(2, 3)))
             x = F.avg_pool2d(x, 2)
         z.append(self.out(einops.rearrange(x, "... c h w -> ... (c h w)")))
         return torch.cat(z, dim=1)
@@ -224,14 +227,17 @@ class UnetDecoder(nn.Module):
         for i in reversed(range(depth)):
             connectors.append(
                 nn.Sequential(
+                    nn.LayerNorm(latent_dim // (depth + 1)),
+                    nn.GELU(),
                     nn.Linear(
                         latent_dim // (depth + 1),
-                        hidden_dim * height * width // 4**i,
+                        hidden_dim,
                     ),
-                    nn.LayerNorm(hidden_dim * height * width // 4**i),
-                    nn.GELU(),
                 )
             )
+            # initialize the connector to zero:
+            connectors[-1][-1].weight.data.zero_()
+            connectors[-1][-1].bias.data.zero_()
             stack = []
             for _ in range(n_resnet_blocks):
                 stack.append(
@@ -264,9 +270,9 @@ class UnetDecoder(nn.Module):
             height *= 2
             z_ = einops.rearrange(
                 connector(z_),
-                "... (c h w) -> ... c h w",
-                w=width,
-                h=height,
+                "... c -> ... c 1 1",
+                # w=width,
+                # h=height,
                 c=self.hidden_dim,
             )
             y = y + z_
